@@ -8,9 +8,9 @@
 load "stdlibcore.ring"
 load "src/utils/color.ring"
 
-# ============================================================================
-# Constants
-# ============================================================================
+// ============================================================================
+// Constants
+// ============================================================================
 
 C_PRETTY_NAME      = "Bolt"
 C_PACKAGE_NAME     = "bolt"
@@ -18,26 +18,26 @@ C_NEW_PACKAGE_NAME = C_PACKAGE_NAME
 C_LIB_NAME         = "ring_" + C_NEW_PACKAGE_NAME
 C_SAMPLES_DIR      = "Using" + C_PRETTY_NAME
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
+// ============================================================================
+// Main Entry Point
+// ============================================================================
 
 func main() {
 	new Uninstaller()
 }
 
-# ============================================================================
-# Uninstaller Class
-# ============================================================================
+// ============================================================================
+// Uninstaller Class
+// ============================================================================
 
 class Uninstaller {
 
-	# Platform configuration
+	// Platform configuration
 	cPathSep   = "/"
 	cLibPrefix = ""
 	cLibExt    = ""
 	
-	# Counters
+	// Counters
 	nRemoved = 0
 	nSkipped = 0
 
@@ -46,9 +46,9 @@ class Uninstaller {
 		performUninstallation()
 	}
 
-	# ========================================================================
-	# Platform Detection
-	# ========================================================================
+	// ========================================================================
+	// Platform Detection
+	// ========================================================================
 
 	func detectPlatform() {
 		if (isWindows()) {
@@ -67,9 +67,9 @@ class Uninstaller {
 		}
 	}
 
-	# ========================================================================
-	# Uninstallation
-	# ========================================================================
+	// ========================================================================
+	// Uninstallation
+	// ========================================================================
 
 	func performUninstallation() {
 		printHeader("Uninstalling " + C_PRETTY_NAME)
@@ -136,7 +136,7 @@ class Uninstaller {
 		cLibFileName = cLibPrefix + C_LIB_NAME + cLibExt
 		lAnyRemoved = false
 		
-		# Remove from Ring lib directory
+		// Remove from Ring lib directory
 		cRingLibPath = buildPath([exefolder(), "..", "lib", cLibFileName])
 		if (fexists(cRingLibPath)) {
 			remove(cRingLibPath)
@@ -144,7 +144,7 @@ class Uninstaller {
 			lAnyRemoved = true
 		}
 		
-		# Remove from Ring bin directory (Windows)
+		// Remove from Ring bin directory (Windows)
 		if (isWindows()) {
 			cBinPath = buildPath([exefolder(), cLibFileName])
 			if (fexists(cBinPath)) {
@@ -154,7 +154,7 @@ class Uninstaller {
 			}
 		}
 		
-		# Remove symlinks from system directories (Unix)
+		// Remove symlinks from system directories (Unix)
 		if (!isWindows()) {
 			if (isFreeBSD() || isMacOSX()) {
 				cSystemLibDir = "/usr/local/lib"
@@ -193,9 +193,9 @@ class Uninstaller {
 		? ""
 	}
 
-	# ========================================================================
-	# Utility Methods
-	# ========================================================================
+	// ========================================================================
+	// Utility Methods
+	// ========================================================================
 
 	func buildPath(aComponents) {
 		cResult = ""

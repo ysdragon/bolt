@@ -9,9 +9,9 @@
 load "stdlibcore.ring"
 load "src/utils/color.ring"
 
-# ============================================================================
-# Constants
-# ============================================================================
+// ============================================================================
+// Constants
+// ============================================================================
 
 C_PRETTY_NAME      = "Bolt"
 C_PACKAGE_NAME     = "bolt"
@@ -19,21 +19,21 @@ C_NEW_PACKAGE_NAME = C_PACKAGE_NAME
 C_LIB_NAME         = "ring_" + C_NEW_PACKAGE_NAME
 C_SAMPLES_DIR      = "Using" + C_PRETTY_NAME
 
-# ============================================================================
-# Main Entry Point
-# ============================================================================
+// ============================================================================
+// Main Entry Point
+// ============================================================================
 
 func main() {
 	new Installer()
 }
 
-# ============================================================================
-# Installer Class
-# ============================================================================
+// ============================================================================
+// Installer Class
+// ============================================================================
 
 class Installer {
 
-	# Platform configuration
+	// Platform configuration
 	cOSName    = ""
 	cArchName  = ""
 	cLibPrefix = ""
@@ -41,7 +41,7 @@ class Installer {
 	cPathSep   = "/"
 	lIsMusl    = false
 
-	# Paths
+	// Paths
 	cPackagePath  = ""
 	cLibPath      = ""
 	cSamplesPath  = ""
@@ -65,9 +65,9 @@ class Installer {
 		performInstallation()
 	}
 
-	# ========================================================================
-	# Platform Detection
-	# ========================================================================
+	// ========================================================================
+	// Platform Detection
+	// ========================================================================
 
 	func detectPlatform() {
 		if (isWindows()) {
@@ -87,7 +87,7 @@ class Installer {
 	}
 
 	func detectMusl() {
-		# Detect musl libc by checking ldd output
+		// Detect musl libc by checking ldd output
 		cOutput = systemCmd("sh -c 'ldd 2>&1'")
 		if (substr(cOutput, "musl")) {
 			lIsMusl = true
@@ -118,16 +118,16 @@ class Installer {
 		return true
 	}
 
-	# ========================================================================
-	# Path Configuration
-	# ========================================================================
+	// ========================================================================
+	// Path Configuration
+	// ========================================================================
 
 	func initializePaths() {
 		cPackagePath = buildPath([
 			exefolder(), "..", "tools", "ringpm", "packages", C_PACKAGE_NAME
 		])
 
-		# Build library path - use musl subdirectory on Linux if musl is detected
+		// Build library path - use musl subdirectory on Linux if musl is detected
 		if (lIsMusl) {
 			cLibPath = buildPath([
 				cPackagePath, "lib", cOSName, "musl", cArchName,
@@ -161,9 +161,9 @@ class Installer {
 		return false
 	}
 
-	# ========================================================================
-	# Installation
-	# ========================================================================
+	// ========================================================================
+	// Installation
+	// ========================================================================
 
 	func performInstallation() {
 		printHeader("Installing " + C_PRETTY_NAME)
@@ -207,17 +207,17 @@ class Installer {
 	func installUnixLibrary() {
 		cRingLibDir = buildPath([exefolder(), "..", "lib"])
 
-		# Determine system library directory
+		// Determine system library directory
 		if (isFreeBSD() || isMacOSX()) {
 			cSystemLibDir = "/usr/local/lib"
 		else
 			cSystemLibDir = "/usr/lib"
 		}
 
-		# Symlink to Ring lib directory
+		// Symlink to Ring lib directory
 		system('ln -sf "' + cLibPath + '" "' + cRingLibDir + '"')
 
-		# Symlink to system lib directory (with privilege escalation fallback)
+		// Symlink to system lib directory (with privilege escalation fallback)
 		cLinkCmd = 'ln -sf "' + cLibPath + '" "' + cSystemLibDir + '"'
 		system(buildElevatedCommand(cLinkCmd))
 	}
@@ -228,9 +228,9 @@ class Installer {
 			   ' || ' + baseCmd + ')'
 	}
 
-	# ========================================================================
-	# Examples & Configuration
-	# ========================================================================
+	// ========================================================================
+	// Examples & Configuration
+	// ========================================================================
 
 	func copyExamples() {
 		cOriginalDir = currentdir()
@@ -264,7 +264,7 @@ class Installer {
 			remove(cOldConfigPath)
 		}
 
-		# Ensure load directory exists
+		// Ensure load directory exists
 		cLoadDir = buildPath([exefolder(), "load"])
 		ensureDirectory(cLoadDir)
 
@@ -307,9 +307,9 @@ class Installer {
 		? ""
 	}
 
-	# ========================================================================
-	# Utility Methods
-	# ========================================================================
+	// ========================================================================
+	// Utility Methods
+	// ========================================================================
 
 	func buildPath(aComponents) {
 		cResult = ""

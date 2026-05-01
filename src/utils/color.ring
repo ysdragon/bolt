@@ -1,17 +1,17 @@
-# This file is part of the Bolt Framework.
+// This file is part of the Bolt Framework.
 
 load "stdlibcore.ring"
 
-# Enable unicode support in Windows CMD/PowerShell
+// Enable unicode support in Windows CMD/PowerShell
 if (isWindows()) {
 	systemSilent("chcp 65001")
 }
 
-# ============================================================================
-# Constants
-# ============================================================================
+// ============================================================================
+// Constants
+// ============================================================================
 
-# Color list
+// Color list
 cColors = [
 	:RED = "31",
 	:GREEN = "32",
@@ -30,7 +30,7 @@ cColors = [
 	:BRIGHT_WHITE = "1;37"
 ]
 
-# Style list
+// Style list
 cStyles = [
 	:RESET = "0",
 	:BOLD = "1",
@@ -41,9 +41,9 @@ cStyles = [
 	:HIDDEN = "8"
 ]
 
-# Unicode symbols for CLI output
+// Unicode symbols for CLI output
 cSymbols = [
-	# Status indicators
+	// Status indicators
 	:TICK       = "✔",
 	:CROSS      = "✖",
 	:WARNING    = "⚠",
@@ -53,14 +53,14 @@ cSymbols = [
 	:POINTER    = "❯",
 	:ELLIPSIS   = "…",
 	
-	# Progress indicators
+	// Progress indicators
 	:CIRCLE_EMPTY    = "◯",
 	:CIRCLE_FILLED   = "◉",
 	:CIRCLE_DOTTED   = "◌",
 	:SQUARE_FILLED   = "◼",
 	:SQUARE_EMPTY    = "◻",
 	
-	# Decorative
+	// Decorative
 	:ARROW_RIGHT = "→",
 	:ARROW_LEFT  = "←",
 	:ARROW_UP    = "↑",
@@ -72,9 +72,9 @@ cSymbols = [
 	:STOP        = "■"
 ]
 
-# ============================================================================
-# Color functions
-# ============================================================================
+// ============================================================================
+// Color functions
+// ============================================================================
 
 func setColor(colorCode) {
 	return char(27) + "[" + colorCode + "m"
@@ -84,7 +84,7 @@ func resetColor() {
 	return char(27) + "[0m"
 }
 
-# Color text with optional style
+// Color text with optional style
 func colorText(params) {
 	text = params[:text]
 	colorKey = params[:color]
@@ -105,9 +105,9 @@ func colorText(params) {
 }
 
 
-# ============================================================================
-# Colored Log functions
-# ============================================================================
+// ============================================================================
+// Colored Log functions
+// ============================================================================
 
 func printError(cMessage) {
 	? colorText([:text = " " + cSymbols[:CROSS] + " ", :color = :BRIGHT_RED, :style = :BOLD]) +
