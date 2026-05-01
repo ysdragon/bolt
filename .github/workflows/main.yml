@@ -31,7 +31,7 @@ jobs:
   update-libs:
     runs-on: ubuntu-latest
     needs: [ alpine, freebsd, macos, ubuntu, windows ]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: always() && !cancelled()
 
     permissions:
       contents: write
