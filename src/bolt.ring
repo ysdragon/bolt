@@ -809,8 +809,7 @@ class Bolt {
     /// @param cTemplate Template string.
     /// @param aData Data to pass to the template.
     func render(cTemplate, aData) {
-        cJson = bolt_json_encode(aData)
-        cResult = bolt_render_template(pHandle, cTemplate, cJson)
+        cResult = bolt_render_template(pHandle, cTemplate, aData)
         send(cResult)
     }
 
@@ -818,8 +817,7 @@ class Bolt {
     /// @param cFilepath Path to the template file.
     /// @param aData Data to pass to the template.
     func renderFile(cFilepath, aData) {
-        cJson = bolt_json_encode(aData)
-        cResult = bolt_render_file(pHandle, cFilepath, cJson)
+        cResult = bolt_render_file(pHandle, cFilepath, aData)
         send(cResult)
     }
 
@@ -828,8 +826,7 @@ class Bolt {
     /// @param aData Data to pass to the template.
     /// @return Rendered string.
     func renderTemplate(cTemplate, aData) {
-        cJson = bolt_json_encode(aData)
-        return bolt_render_template(pHandle, cTemplate, cJson)
+        return bolt_render_template(pHandle, cTemplate, aData)
     }
 
     // ========================================
