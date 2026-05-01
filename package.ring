@@ -39,6 +39,15 @@ aPackageInfo = [
 		"src/utils/install.ring",
 		"src/utils/uninstall.ring",
 
+		// Examples
+		"examples/basic/01_hello.ring",
+		"examples/basic/02_http_methods.ring",
+		"examples/basic/03_route_params.ring",
+		"examples/basic/04_request_response.ring",
+		"examples/basic/05_json_api.ring",
+		"examples/basic/06_static_files.ring",
+		"examples/basic/static/index.html",
+
 		// Rust - Config
 		"src/rust_src/Cargo.toml",
 		"src/rust_src/src/lib.rs",
