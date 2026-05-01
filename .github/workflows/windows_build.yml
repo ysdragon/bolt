@@ -1,0 +1,73 @@
+name: Windows Build
+
+on:
+  workflow_call:
+    inputs:
+      ring-version:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        include:
+        - arch: Win32
+          arch_name: i386
+          rust_target: i686-pc-windows-msvc
+        - arch: x64
+          arch_name: amd64
+          rust_target: x86_64-pc-windows-msvc
+        - arch: ARM64
+          arch_name: arm64
+          rust_target: aarch64-pc-windows-msvc
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Clone Ring Language
+      uses: actions/checkout@v6
+      with:
+        repository: ringpackages/ringsrc
+        path: ring
+        ref: ${{ inputs.ring-version }}
+
+    - name: Configure and Build Ring Language for ${{ matrix.arch_name }}
+      shell: cmd
+      run: |
+        cd ring\language
+        cmake . -A ${{ matrix.arch }}
+        cmake --build . --config Release
+        cmake --install .
+
+    - name: Set RING environment variable
+      run: echo "RING=${{ github.workspace }}\ring" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.rust_target }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: "src/rust_src -> target"
+
+    - name: Build ring_bolt Rust library
+      run: cargo build --release --target ${{ matrix.rust_target }}
+      working-directory: src/rust_src
+
+    - name: Copy Rust artifacts to lib directory
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path lib/windows/${{ matrix.arch_name }}
+        Copy-Item src/rust_src/target/${{ matrix.rust_target }}/release/ring_bolt.dll lib/windows/${{ matrix.arch_name }}/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ring-bolt-windows-${{ matrix.arch_name }}
+        path: lib/windows/${{ matrix.arch_name }}/ring_bolt.dll

@@ -1,0 +1,70 @@
+name: Alpine Build
+
+on:
+  workflow_call:
+    inputs:
+      ring-version:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ matrix.arch == 'amd64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
+    strategy:
+      matrix:
+        include:
+        - arch: amd64
+        - arch: arm64
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Clone Ring Language
+      uses: actions/checkout@v6
+      with:
+        repository: ringpackages/ringsrc
+        path: ring
+        ref: ${{ inputs.ring-version }}
+
+    - name: Cache Rust dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          cargo-cache
+          src/rust_src/target
+        key: alpine-${{ matrix.arch }}-cargo-${{ hashFiles('src/rust_src/Cargo.lock') }}
+        restore-keys: |
+          alpine-${{ matrix.arch }}-cargo-
+
+    - name: Build in Alpine container
+      run: |
+        mkdir -p cargo-cache
+        docker run --rm \
+          -v ${{ github.workspace }}:/workspace \
+          -v ${{ github.workspace }}/cargo-cache:/root/.cargo \
+          -w /workspace \
+          alpine:3.23 sh -c '
+            apk add --no-cache cmake make gcc g++ musl-dev fontconfig-dev rust cargo curl python3 clang clang-dev ninja git gn linux-headers
+            cd ring/language
+            cmake . -DCMAKE_BUILD_TYPE=Release -GNinja
+            ninja install
+            cd ../..
+            export RING=/workspace/ring
+            export SKIA_GN_COMMAND=gn
+            export SKIA_NINJA_COMMAND=ninja
+            cd src/rust_src
+            cargo build --release
+            chmod -R a+r /root/.cargo /workspace/src/rust_src/target
+          '
+
+    - name: Copy Rust artifacts to lib directory
+      run: |
+        mkdir -p lib/linux/musl/${{ matrix.arch }}
+        cp src/rust_src/target/release/libring_bolt.so lib/linux/musl/${{ matrix.arch }}/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ring-bolt-linux-musl-${{ matrix.arch }}
+        path: lib/linux/musl/${{ matrix.arch }}/libring_bolt.so

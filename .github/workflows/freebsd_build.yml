@@ -1,0 +1,72 @@
+name: FreeBSD Build
+
+on:
+  workflow_call:
+    inputs:
+      ring-version:
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ${{ matrix.arch == 'amd64' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
+    strategy:
+      matrix:
+        include:
+        - release: "15.0"
+          arch: amd64
+          vm_arch: amd64
+        # - release: "15.0"
+        #   arch: arm64
+        #   vm_arch: aarch64
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Clean lib directory
+      run: rm -rf lib
+
+    - name: Build in FreeBSD VM
+      id: freebsd_build
+      uses: vmactions/freebsd-vm@v1
+      with:
+        release: ${{ matrix.release }}
+        arch: ${{ matrix.vm_arch }}
+        usesh: true
+        sync: rsync
+        mem: 4096
+        prepare: |
+          pkg install -y cmake git ninja pkgconf curl fontconfig python3
+
+        run: |
+          # Clone Ring Language
+          git clone --branch ${{ inputs.ring-version }} --depth 1 https://github.com/ringpackages/ringsrc.git ring
+          cd ring
+
+          # Set RING environment variable
+          export RING=$(pwd)
+
+          # Build and Install Ring Language
+          cd language
+          cmake . -DCMAKE_BUILD_TYPE=Release -GNinja
+          ninja install
+          cd ../..
+
+          # Install Rust toolchain
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          . $HOME/.cargo/env
+
+          # Build ring_bolt Rust library
+          cd src/rust_src
+          cargo build --release
+          cd ../..
+
+          # Copy artifacts
+          mkdir -p lib/freebsd/${{ matrix.arch }}
+          cp src/rust_src/target/release/libring_bolt.so lib/freebsd/${{ matrix.arch }}/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ring-bolt-freebsd-${{ matrix.arch }}
+        path: lib/freebsd/${{ matrix.arch }}/libring_bolt.so

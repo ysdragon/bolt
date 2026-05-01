@@ -1,0 +1,62 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths:
+    - '**.rs'
+    - '**/Cargo.toml'
+    - '**/Cargo.lock'
+  pull_request:
+    paths:
+    - '**.rs'
+    - '**/Cargo.toml'
+    - '**/Cargo.lock'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Clone Ring Language
+      uses: actions/checkout@v6
+      with:
+        repository: ringpackages/ringsrc
+        path: ring
+        ref: master
+
+    - name: Build and Install Ring Language
+      run: |
+        cd ring/language
+        cmake . -DCMAKE_BUILD_TYPE=Release
+        make install
+
+    - name: Set RING environment variable
+      run: echo "RING=$(pwd)/ring" >> $GITHUB_ENV
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo registry and build
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          src/rust_src/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('src/rust_src/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Run tests
+      working-directory: src/rust_src
+      run: cargo test

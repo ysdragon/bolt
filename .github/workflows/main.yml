@@ -1,0 +1,81 @@
+name: Build and Update
+
+on:
+  workflow_dispatch:
+jobs:
+  alpine:
+    uses: ./.github/workflows/alpine_build.yml
+    with:
+      ring-version: master
+
+  freebsd:
+    uses: ./.github/workflows/freebsd_build.yml
+    with:
+      ring-version: master
+
+  macos:
+    uses: ./.github/workflows/macos_build.yml
+    with:
+      ring-version: master
+
+  ubuntu:
+    uses: ./.github/workflows/ubuntu_build.yml
+    with:
+      ring-version: master
+
+  windows:
+    uses: ./.github/workflows/windows_build.yml
+    with:
+      ring-version: master
+
+  update-libs:
+    runs-on: ubuntu-latest
+    needs: [ alpine, freebsd, macos, ubuntu, windows ]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Download all artifacts from this workflow run
+      uses: actions/download-artifact@v6
+      with:
+        path: artifacts
+
+    - name: Copy artifacts to lib directory
+      run: |
+        mkdir -p lib
+        echo "=== Artifacts structure ==="
+        find artifacts -type f
+        echo "=== Copying artifacts ==="
+        # Each artifact is named ring-bolt-{os}-{arch} and contains a single binary
+        for artifact_dir in artifacts/ring-bolt-*/; do
+          dirname=$(basename "$artifact_dir")
+          # Extract os and arch from ring-bolt-{os}-{arch}
+          os_arch="${dirname#ring-bolt-}"
+          os="${os_arch%-*}"
+          os="${os//-//}"
+          arch="${os_arch##*-}"
+          mkdir -p "lib/${os}/${arch}"
+          echo "Copying ${os}/${arch} from: $artifact_dir"
+          cp -a "${artifact_dir}"* "lib/${os}/${arch}/"
+        done
+        echo "=== Final lib structure ==="
+        find lib -type f
+
+    - name: Commit and push changes
+      run: |
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add lib
+        if ! git diff --staged --quiet; then
+          git commit -m "* Update libs"
+          git push
+        else
+          echo "No library changes to commit."
+        fi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
