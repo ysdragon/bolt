@@ -12,4 +12,5 @@ else
 	raise("Unsupported OS! You need to build the library for your OS.")
 }
 
+load "package.ring"
 load "src/bolt.ring"
