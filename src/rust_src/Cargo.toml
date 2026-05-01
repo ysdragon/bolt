@@ -1,0 +1,62 @@
+[package]
+name = "ring-bolt"
+version = "1.0.0"
+edition = "2024"
+authors = ["Youssef Saeed"]
+description = "Bolt - A blazing-fast HTTP framework for Ring programming language"
+license = "MIT"
+repository = "https://github.com/ysdragon/bolt"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = false
+
+[dependencies]
+actix-cors = "0.7"
+actix-files = "0.6"
+actix-multipart = "0.7"
+actix-web = { version = "4.13", features = ["rustls-0_23", "macros"] }
+actix-ws = "0.4"
+aes-gcm = "0.10"
+ammonia = "4.1"
+argon2 = "0.5"
+base64 = "0.22"
+bcrypt = "0.19"
+chrono = "0.4"
+cookie = { version = "0.18", features = ["signed", "key-expansion"] }
+dashmap = "6.0"
+dotenvy = "0.15"
+futures-util = "0.3"
+governor = "0.10"
+hex = "0.4"
+hmac = "0.12"
+ipnetwork = "0.21"
+jsonschema = "0.46"
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+mime_guess = "2.0"
+minijinja = "2.19"
+moka = { version = "0.12", features = ["sync"] }
+parking_lot = "0.12"
+regex = "1.12"
+ring-lang-rs = "0.1"
+rustls = { version = "0.23", features = ["aws_lc_rs"] }
+rustls-pemfile = "2.2"
+scrypt = { version = "0.12", features = ["password-hash", "phc", "getrandom"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tokio = { version = "1.52", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+urlencoding = "2.1"
+utoipa = { version = "5.4", features = ["actix_extras"] }
+utoipa-swagger-ui = { version = "9.0", features = ["actix-web"] }
+uuid = { version = "1.23", features = ["v4"] }
+
