@@ -9,21 +9,19 @@ use ring_lang_rs::*;
 use crate::HTTP_SERVER_TYPE;
 
 use super::HttpServer;
+use crate::modules::json::ring_list_to_json;
 
-/// bolt_render_template(server, template, data_json) - render template string with MiniJinja
+/// bolt_render_template(server, template, data) - render template string with MiniJinja
 ring_func!(bolt_render_template, |p| {
     ring_check_paracount!(p, 3);
     ring_check_cpointer!(p, 1);
     ring_check_string!(p, 2);
-    ring_check_string!(p, 3);
+    ring_check_list!(p, 3);
 
     let _ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
-
     let template_str = ring_get_string!(p, 2);
-    let data_json = ring_get_string!(p, 3);
-
-    let data: serde_json::Value = serde_json::from_str(data_json)
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let list = ring_api_getlist(p, 3);
+    let data = ring_list_to_json(list);
 
     let mut env = minijinja::Environment::new();
     if let Err(e) = env.add_template("template", template_str) {
@@ -47,17 +45,16 @@ ring_func!(bolt_render_template, |p| {
     }
 });
 
-/// bolt_render_file(server, filepath, data_json) - render template file with MiniJinja
+/// bolt_render_file(server, filepath, data) - render template file with MiniJinja
 ring_func!(bolt_render_file, |p| {
     ring_check_paracount!(p, 3);
     ring_check_cpointer!(p, 1);
     ring_check_string!(p, 2);
-    ring_check_string!(p, 3);
+    ring_check_list!(p, 3);
 
     let _ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
 
     let filepath = ring_get_string!(p, 2);
-    let data_json = ring_get_string!(p, 3);
 
     let ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
 
@@ -115,8 +112,8 @@ ring_func!(bolt_render_file, |p| {
         }
     };
 
-    let data: serde_json::Value = serde_json::from_str(data_json)
-        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let list = ring_api_getlist(p, 3);
+    let data = ring_list_to_json(list);
 
     let dir = std::path::Path::new(filepath)
         .parent()
