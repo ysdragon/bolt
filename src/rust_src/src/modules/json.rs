@@ -61,7 +61,7 @@ ring_func!(bolt_json_pretty, |p| {
 });
 
 // Convert Ring list to serde_json Value
-fn ring_list_to_json(list: RingList) -> Value {
+pub fn ring_list_to_json(list: RingList) -> Value {
     let size = ring_list_getsize(list);
 
     if size == 0 {
