@@ -10,6 +10,29 @@ use crate::HTTP_SERVER_TYPE;
 
 use super::{HttpServer, RouteDefinition, convert_path_params};
 
+/// Extract path parameter names from an OpenAPI-style path like "/users/{id}/posts/{pid}"
+fn extract_path_params(path: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    let mut chars = path.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '{' {
+            let mut name = String::new();
+            while let Some(&next) = chars.peek() {
+                if next == '}' {
+                    chars.next(); // consume }
+                    break;
+                }
+                name.push(chars.next().unwrap());
+            }
+            if !name.is_empty() {
+                params.push(name);
+            }
+        }
+    }
+    params
+}
+
 /// bolt_openapi_spec(server, spec_json) - set OpenAPI spec JSON
 ring_func!(bolt_openapi_spec, |p| {
     ring_check_paracount!(p, 2);
@@ -206,8 +229,8 @@ pub(crate) fn generate_openapi_spec(
     description: &str,
 ) -> String {
     use utoipa::openapi::{
-        Info, OpenApiBuilder, PathsBuilder, ResponseBuilder, ResponsesBuilder,
-        path::{HttpMethod, OperationBuilder, PathItem},
+        Info, OpenApiBuilder, PathsBuilder, Required, ResponseBuilder, ResponsesBuilder,
+        path::{HttpMethod, OperationBuilder, ParameterBuilder, ParameterIn, PathItem},
     };
 
     let mut paths_builder = PathsBuilder::new();
@@ -229,6 +252,16 @@ pub(crate) fn generate_openapi_spec(
 
         if !route.tags.is_empty() {
             op_builder = op_builder.tags(Some(route.tags.clone()));
+        }
+
+        // Add path parameters extracted from {param} placeholders
+        for param_name in extract_path_params(&path_key) {
+            let param = ParameterBuilder::new()
+                .name(param_name)
+                .parameter_in(ParameterIn::Path)
+                .required(Required::True)
+                .build();
+            op_builder = op_builder.parameter(param);
         }
 
         let operation = op_builder.build();
@@ -429,5 +462,10 @@ mod tests {
 
         let spec = generate_openapi_spec(&routes, "API", "1.0", "");
         assert!(spec.contains("\"/users/{id}/posts/{pid}\""));
+        assert!(spec.contains("\"parameters\""));
+        assert!(spec.contains("\"name\":\"id\""));
+        assert!(spec.contains("\"name\":\"pid\""));
+        assert!(spec.contains("\"in\":\"path\""));
+        assert!(spec.contains("\"required\":true"));
     }
 }
