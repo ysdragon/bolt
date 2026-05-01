@@ -1152,10 +1152,19 @@ async fn run_server(
                 match e.kind() {
                     std::io::ErrorKind::AddrInUse => {
                         eprintln!("\n[error] Port {} is already in use.", port);
-                        eprintln!(
-                            "        Try: kill $(lsof -t -i:{}) or use a different port.\n",
-                            port
-                        );
+                        #[cfg(target_os = "windows")]
+                        {
+                            eprintln!("        Try: netstat -ano | findstr :{}", port);
+                            eprintln!("        Then: taskkill /PID <PID> /F");
+                            eprintln!("        Or use a different port.\n");
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            eprintln!(
+                                "        Try: kill $(lsof -t -i:{}) or use a different port.\n",
+                                port
+                            );
+                        }
                     }
                     std::io::ErrorKind::PermissionDenied => {
                         eprintln!("\n[error] Permission denied. Ports below 1024 require root.\n");
