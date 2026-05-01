@@ -968,7 +968,7 @@ async fn run_server(
 
         for static_route in &static_routes {
             let url_path = static_route.url_path.trim_end_matches('/');
-            app = app.service(Files::new(url_path, &static_route.dir_path));
+            app = app.service(Files::new(url_path, &static_route.dir_path).index_file("index.html"));
         }
 
         if let Some(ref spec) = openapi_spec_clone {
