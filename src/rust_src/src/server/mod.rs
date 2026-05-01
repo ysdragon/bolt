@@ -506,17 +506,6 @@ fn next_request_id() -> u64 {
 // Core Server Ring Functions
 // ========================================
 
-extern "C" fn bolt_server_free(_state: *mut c_void, ptr: *mut c_void) {
-    if !ptr.is_null() {
-        unsafe {
-            let server = &mut *(ptr as *mut HttpServer);
-            *server.running.lock() = false;
-            let _ = server.server_shutdown_tx.send(());
-            drop(Box::from_raw(ptr as *mut HttpServer));
-        }
-    }
-}
-
 /// bolt_new() -> HttpServer
 ring_func!(bolt_new, |p| {
     ring_check_paracount!(p, 0);
@@ -524,7 +513,7 @@ ring_func!(bolt_new, |p| {
     let server = Box::new(HttpServer::new(p));
     let ptr = Box::into_raw(server);
 
-    ring_ret_managed_cpointer!(p, ptr, HTTP_SERVER_TYPE, bolt_server_free);
+    ring_ret_cpointer!(p, ptr, HTTP_SERVER_TYPE);
 });
 
 /// bolt_set_host(server, host) - set IP address to listen on
@@ -968,7 +957,8 @@ async fn run_server(
 
         for static_route in &static_routes {
             let url_path = static_route.url_path.trim_end_matches('/');
-            app = app.service(Files::new(url_path, &static_route.dir_path).index_file("index.html"));
+            app =
+                app.service(Files::new(url_path, &static_route.dir_path).index_file("index.html"));
         }
 
         if let Some(ref spec) = openapi_spec_clone {
