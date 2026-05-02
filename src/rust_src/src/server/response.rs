@@ -6,6 +6,7 @@
 
 use super::{HttpServer, PendingResponse, ResponseBody};
 use crate::HTTP_SERVER_TYPE;
+use crate::ring_list_to_json;
 use ring_lang_rs::*;
 use std::collections::HashMap;
 
@@ -51,12 +52,11 @@ ring_func!(bolt_respond, |p| {
     ring_ret_number!(p, 1.0);
 });
 
-/// bolt_respond_json(server, status, json_string)
+/// bolt_respond_json(server, status, data) — data can be list or json string
 ring_func!(bolt_respond_json, |p| {
     ring_check_paracount!(p, 3);
     ring_check_cpointer!(p, 1);
     ring_check_number!(p, 2);
-    ring_check_string!(p, 3);
 
     let ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
     if ptr.is_null() {
@@ -65,7 +65,14 @@ ring_func!(bolt_respond_json, |p| {
     }
 
     let status = ring_get_number!(p, 2) as u16;
-    let json_body = ring_get_string!(p, 3);
+
+    let json_body = if ring_api_islist(p, 3) {
+        let list = ring_api_getlist(p, 3);
+        let value = ring_list_to_json(list);
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+    } else {
+        ring_get_string!(p, 3).to_string()
+    };
 
     unsafe {
         let server = &*(ptr as *const HttpServer);

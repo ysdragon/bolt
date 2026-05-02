@@ -4,6 +4,7 @@
 
 //! Authentication: JWT, CSRF, Basic Auth
 
+use crate::ring_list_to_json;
 use ring_lang_rs::*;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -151,13 +152,18 @@ struct JwtClaims {
     iat: Option<u64>,
 }
 
-/// bolt_jwt_encode(data_json, secret, expires_in_seconds) -> token
+/// bolt_jwt_encode(data, secret, expires_in_seconds) -> token  (data can be list or json string)
 ring_func!(bolt_jwt_encode, |p| {
     ring_check_paracount_range!(p, 2, 3);
-    ring_check_string!(p, 1);
     ring_check_string!(p, 2);
 
-    let data_json = ring_get_string!(p, 1);
+    let data_json = if ring_api_islist(p, 1) {
+        let list = ring_api_getlist(p, 1);
+        let value = ring_list_to_json(list);
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
+    } else {
+        ring_get_string!(p, 1).to_string()
+    };
     let secret = ring_get_string!(p, 2);
 
     let expires_in = if ring_api_paracount(p) >= 3 && ring_api_isnumber(p, 3) {
@@ -166,7 +172,7 @@ ring_func!(bolt_jwt_encode, |p| {
         None
     };
 
-    let data: serde_json::Value = serde_json::from_str(data_json)
+    let data: serde_json::Value = serde_json::from_str(&data_json)
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
     use std::time::{SystemTime, UNIX_EPOCH};
