@@ -987,7 +987,8 @@ async fn run_server(
         }
 
         let cors = if cors_config.enabled {
-            if cors_config.origins.is_empty() {
+            let has_wildcard = cors_config.origins.iter().any(|o| o == "*");
+            if cors_config.origins.is_empty() || has_wildcard {
                 Cors::default()
                     .allow_any_origin()
                     .send_wildcard()
@@ -1010,11 +1011,13 @@ async fn run_server(
             Cors::default()
         };
 
-        let default_cors_header = if cors_config.enabled && cors_config.origins.is_empty() {
-            DefaultHeaders::new().add((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"))
-        } else {
-            DefaultHeaders::new()
-        };
+        let has_wildcard = cors_config.origins.iter().any(|o| o == "*");
+        let default_cors_header =
+            if cors_config.enabled && (cors_config.origins.is_empty() || has_wildcard) {
+                DefaultHeaders::new().add((header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"))
+            } else {
+                DefaultHeaders::new()
+            };
         app.wrap(Condition::new(compression, Compress::default()))
             .wrap(Condition::new(cors_config.enabled, cors))
             .wrap(default_cors_header)
