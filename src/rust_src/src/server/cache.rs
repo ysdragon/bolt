@@ -32,18 +32,9 @@ ring_func!(bolt_cache_set, |p| {
 
     unsafe {
         let server = &*(ptr as *const HttpServer);
-        server.cache.insert(key.to_string(), value.to_string());
-        let mut expiry = server.cache_expiry.lock();
-        if ttl_seconds > 0 {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-            expiry.insert(key.to_string(), now + ttl_seconds);
-        } else {
-            expiry.remove(key);
-        }
+        server
+            .cache
+            .insert(key.to_string(), (value.to_string(), ttl_seconds));
     }
 
     ring_ret_number!(p, 1.0);
@@ -64,28 +55,8 @@ ring_func!(bolt_cache_get, |p| {
 
     unsafe {
         let server = &*(ptr as *const HttpServer);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        {
-            let expiry = server.cache_expiry.lock();
-            if let Some(expires_at) = expiry.get(key).cloned() {
-                if now >= expires_at {
-                    drop(expiry);
-                    let mut expiry = server.cache_expiry.lock();
-                    if expiry.get(key).map(|&t| now >= t).unwrap_or(false) {
-                        expiry.remove(key);
-                        server.cache.invalidate(&key.to_string());
-                    }
-                    ring_ret_string!(p, "");
-                    return;
-                }
-            }
-        }
-
         match server.cache.get(&key.to_string()) {
-            Some(value) => ring_ret_string!(p, &value),
+            Some(entry) => ring_ret_string!(p, &entry.0),
             None => {
                 ring_ret_string!(p, "");
             }
@@ -109,8 +80,6 @@ ring_func!(bolt_cache_delete, |p| {
     unsafe {
         let server = &*(ptr as *const HttpServer);
         server.cache.invalidate(&key.to_string());
-        let mut expiry = server.cache_expiry.lock();
-        expiry.remove(key);
     }
 
     ring_ret_number!(p, 1.0);
@@ -129,8 +98,6 @@ ring_func!(bolt_cache_clear, |p| {
     unsafe {
         let server = &*(ptr as *const HttpServer);
         server.cache.invalidate_all();
-        let mut expiry = server.cache_expiry.lock();
-        expiry.clear();
     }
 
     ring_ret_number!(p, 1.0);
@@ -139,13 +106,14 @@ ring_func!(bolt_cache_clear, |p| {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::SystemTime;
 
     #[test]
     fn test_cache_set_and_get() {
         let server = HttpServer::new(std::ptr::null_mut());
-        server.cache.insert("key1".into(), "value1".into());
-        assert_eq!(server.cache.get("key1").unwrap(), "value1");
+        server.cache.insert("key1".into(), ("value1".into(), 0));
+        let entry = server.cache.get("key1").unwrap();
+        assert_eq!(entry.0, "value1");
+        assert_eq!(entry.1, 0);
     }
 
     #[test]
@@ -157,7 +125,7 @@ mod tests {
     #[test]
     fn test_cache_delete() {
         let server = HttpServer::new(std::ptr::null_mut());
-        server.cache.insert("key1".into(), "value1".into());
+        server.cache.insert("key1".into(), ("value1".into(), 0));
         server.cache.invalidate("key1");
         assert!(server.cache.get("key1").is_none());
     }
@@ -165,62 +133,30 @@ mod tests {
     #[test]
     fn test_cache_clear() {
         let server = HttpServer::new(std::ptr::null_mut());
-        server.cache.insert("a".into(), "1".into());
-        server.cache.insert("b".into(), "2".into());
+        server.cache.insert("a".into(), ("1".into(), 0));
+        server.cache.insert("b".into(), ("2".into(), 0));
         server.cache.invalidate_all();
         assert!(server.cache.get("a").is_none());
         assert!(server.cache.get("b").is_none());
     }
 
     #[test]
-    fn test_cache_expiry_set_and_get() {
+    fn test_cache_set_with_ttl() {
         let server = HttpServer::new(std::ptr::null_mut());
-        let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        server.cache.insert("key1".into(), "value1".into());
-        server.cache_expiry.lock().insert("key1".into(), now + 3600);
-
-        let expiry = server.cache_expiry.lock();
-        assert_eq!(expiry.get("key1").cloned(), Some(now + 3600));
-    }
-
-    #[test]
-    fn test_cache_expiry_check_expired() {
-        let server = HttpServer::new(std::ptr::null_mut());
-        let now = SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        server.cache.insert("expired_key".into(), "value".into());
         server
-            .cache_expiry
-            .lock()
-            .insert("expired_key".into(), now - 1);
-
-        let expiry = server.cache_expiry.lock();
-        if let Some(expires_at) = expiry.get("expired_key").cloned() {
-            assert!(now >= expires_at);
-        }
+            .cache
+            .insert("ttl_key".into(), ("value".into(), 3600));
+        let entry = server.cache.get("ttl_key").unwrap();
+        assert_eq!(entry.0, "value");
+        assert_eq!(entry.1, 3600);
     }
 
     #[test]
-    fn test_cache_expiry_remove() {
+    fn test_cache_set_no_ttl() {
         let server = HttpServer::new(std::ptr::null_mut());
-        server.cache_expiry.lock().insert("key".into(), 9999);
-        server.cache_expiry.lock().remove("key");
-        assert!(server.cache_expiry.lock().get("key").is_none());
-    }
-
-    #[test]
-    fn test_cache_expiry_clear() {
-        let server = HttpServer::new(std::ptr::null_mut());
-        server.cache_expiry.lock().insert("a".into(), 1);
-        server.cache_expiry.lock().insert("b".into(), 2);
-        server.cache_expiry.lock().clear();
-        assert!(server.cache_expiry.lock().is_empty());
+        server.cache.insert("perm_key".into(), ("value".into(), 0));
+        let entry = server.cache.get("perm_key").unwrap();
+        assert_eq!(entry.0, "value");
+        assert_eq!(entry.1, 0);
     }
 }

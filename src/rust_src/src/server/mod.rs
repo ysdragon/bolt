@@ -53,8 +53,42 @@ use crate::HTTP_SERVER_TYPE;
 use cookie::{Cookie, CookieJar, Key};
 use governor::{Quota, RateLimiter};
 use ipnetwork::IpNetwork;
+use moka::policy::Expiry;
 use std::num::NonZeroU32;
 use std::str::FromStr;
+
+struct BoltCacheExpiry(u64);
+
+impl Expiry<String, (String, u64)> for BoltCacheExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &String,
+        value: &(String, u64),
+        _created_at: std::time::Instant,
+    ) -> Option<Duration> {
+        let ttl = value.1;
+        if ttl > 0 {
+            Some(Duration::from_secs(ttl))
+        } else {
+            Some(Duration::from_secs(self.0))
+        }
+    }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        value: &(String, u64),
+        _updated_at: std::time::Instant,
+        _duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        let ttl = value.1;
+        if ttl > 0 {
+            Some(Duration::from_secs(ttl))
+        } else {
+            Some(Duration::from_secs(self.0))
+        }
+    }
+}
 
 /// Route definition
 #[derive(Clone)]
@@ -256,8 +290,7 @@ pub struct HttpServer {
     pub config: ServerConfig,
     pub start_time: Instant,
     pub sessions: Arc<Cache<String, HashMap<String, String>>>,
-    pub cache: Arc<Cache<String, String>>,
-    pub cache_expiry: Arc<Mutex<HashMap<String, u64>>>,
+    pub cache: Arc<Cache<String, (String, u64)>>,
     pub ws_broadcast_tx: tokio::sync::broadcast::Sender<String>,
     pub vm: Arc<Mutex<VmPtr>>,
     pub running: Arc<Mutex<bool>>,
@@ -313,10 +346,9 @@ impl HttpServer {
             cache: Arc::new(
                 Cache::builder()
                     .max_capacity(10_000)
-                    .time_to_live(Duration::from_secs(300))
+                    .expire_after(BoltCacheExpiry(300))
                     .build(),
             ),
-            cache_expiry: Arc::new(Mutex::new(HashMap::new())),
             ws_broadcast_tx: tokio::sync::broadcast::channel(10_000).0,
             vm: Arc::new(Mutex::new(VmPtr(vm))),
             running: Arc::new(Mutex::new(false)),
@@ -629,7 +661,7 @@ ring_func!(bolt_listen, |p| {
         server.cache = Arc::new(
             Cache::builder()
                 .max_capacity(server.config.cache_max_capacity)
-                .time_to_live(Duration::from_secs(server.config.cache_ttl_secs))
+                .expire_after(BoltCacheExpiry(server.config.cache_ttl_secs))
                 .build(),
         );
         server.sessions = Arc::new(
@@ -638,36 +670,6 @@ ring_func!(bolt_listen, |p| {
                 .time_to_live(Duration::from_secs(server.config.session_ttl_secs))
                 .build(),
         );
-
-        let cache_expiry = server.cache_expiry.clone();
-        let cache_for_cleanup = server.cache.clone();
-        let running_for_cleanup = running.clone();
-        std::thread::spawn(move || {
-            loop {
-                for _ in 0..60 {
-                    std::thread::sleep(Duration::from_secs(1));
-                    if !*running_for_cleanup.lock() {
-                        return;
-                    }
-                }
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                let mut expiry = cache_expiry.lock();
-                if expiry.len() > 100 {
-                    let expired: Vec<String> = expiry
-                        .iter()
-                        .filter(|&(_, t)| now >= *t)
-                        .map(|(k, _)| k.clone())
-                        .collect();
-                    for k in &expired {
-                        expiry.remove(k);
-                        cache_for_cleanup.invalidate(k);
-                    }
-                }
-            }
-        });
 
         let system = actix_web::rt::System::new();
         system.block_on(async {
@@ -3284,7 +3286,7 @@ mod tests {
                 std::thread::spawn(move || {
                     server
                         .cache
-                        .insert(format!("key{}", i), format!("value{}", i));
+                        .insert(format!("key{}", i), (format!("value{}", i), 0));
                     let _ = server.cache.get(&format!("key{}", i));
                 })
             })
