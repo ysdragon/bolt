@@ -28,6 +28,10 @@ aPackageInfo = [
 		"README.md",
 		"LICENSE",
 
+		// Docs
+		"docs/API.md",
+		"docs/USAGE.md",
+
 		// Assets
 		"assets/logo.png",
 
