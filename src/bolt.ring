@@ -165,7 +165,8 @@ class Bolt {
     /// @param cMiddlewareName Name of the middleware handler.
     /// @return Self for chaining.
     /// @code
-    /// @get("/api/data", func { ... }).before("authMiddleware")
+    /// @get("/api/data", func { ... })
+    /// before("authMiddleware")
     /// @endcode
     func before(cMiddlewareName) {
         if (!isNull($bolt_last_route)) {
@@ -178,7 +179,8 @@ class Bolt {
     /// @param cMiddlewareName Name of the middleware handler.
     /// @return Self for chaining.
     /// @code
-    /// @get("/api/data", func { ... }).after("logMiddleware")
+    /// @get("/api/data", func { ... })
+    /// after("logMiddleware")
     /// @endcode
     func after(cMiddlewareName) {
         if (!isNull($bolt_last_route)) {
@@ -192,7 +194,8 @@ class Bolt {
     /// @param nWindow Time window in seconds.
     /// @return Self for chaining.
     /// @code
-    /// @get("/api/data", func { ... }).routeRateLimit(100, 60)
+    /// @get("/api/data", func { ... })
+    /// routeRateLimit(100, 60)
     /// @endcode
     func routeRateLimit(nMax, nWindow) {
         if (!isNull($bolt_last_route)) {
@@ -206,7 +209,8 @@ class Bolt {
     /// @param cPattern Regex pattern to match.
     /// @return Self for chaining.
     /// @code
-    /// @get("/users/:id", func { ... }).where("id", "[0-9]+")
+    /// @get("/users/:id", func { ... })
+    /// where("id", "[0-9]+")
     /// @endcode
     func where(cParamName, cPattern) {
         if (!isNull($bolt_last_route)) {
@@ -219,7 +223,8 @@ class Bolt {
     /// @param aConstraints List of [paramName, pattern] pairs.
     /// @return Self for chaining.
     /// @code
-    /// @get("/posts/:id/:slug", func { ... }).whereAll([["id", "[0-9]+"], ["slug", "[a-z-]+"]])
+    /// @get("/posts/:id/:slug", func { ... })
+    /// whereAll([["id", "[0-9]+"], ["slug", "[a-z-]+"]])
     /// @endcode
     func whereAll(aConstraints) {
         for aConstraint in aConstraints {
@@ -232,7 +237,8 @@ class Bolt {
     /// @param cDescription Description text.
     /// @return Self for chaining.
     /// @code
-    /// @get("/users", func { ... }).describe("Get all users")
+    /// @get("/users", func { ... })
+    /// describe("Get all users")
     /// @endcode
     func describe(cDescription) {
         if (!isNull($bolt_last_route) && len(aRoutes) > 0) {
@@ -246,7 +252,8 @@ class Bolt {
     /// @param cTag Tag name.
     /// @return Self for chaining.
     /// @code
-    /// @get("/users", func { ... }).tag("Users")
+    /// @get("/users", func { ... })
+    /// tag("Users")
     /// @endcode
     func tag(cTag) {
         if (!isNull($bolt_last_route) && len(aRoutes) > 0) {
@@ -712,16 +719,14 @@ class Bolt {
     /// @brief Sends a JSON response with 200 status.
     /// @param aData Data to encode as JSON.
     func json(aData) {
-        cJson = bolt_json_encode(aData)
-        bolt_respond_json(pHandle, 200, cJson)
+        bolt_respond_json(pHandle, 200, aData)
     }
 
     /// @brief Sends a JSON response with a custom status code.
     /// @param nStatus HTTP status code.
     /// @param aData Data to encode as JSON.
     func jsonWithStatus(nStatus, aData) {
-        cJson = bolt_json_encode(aData)
-        bolt_respond_json(pHandle, nStatus, cJson)
+        bolt_respond_json(pHandle, nStatus, aData)
     }
 
     /// @brief Sends a file as the response.
@@ -1309,8 +1314,7 @@ class Bolt {
     /// @param cSecret Secret key for signing.
     /// @return JWT token string.
     func jwtEncode(aData, cSecret) {
-        cJson = bolt_json_encode(aData)
-        return bolt_jwt_encode(cJson, cSecret)
+        return bolt_jwt_encode(aData, cSecret)
     }
 
     /// @brief Encodes data as a JWT token with expiration.
@@ -1319,8 +1323,7 @@ class Bolt {
     /// @param nExpires Expiration time in seconds.
     /// @return JWT token string.
     func jwtEncodeExp(aData, cSecret, nExpires) {
-        cJson = bolt_json_encode(aData)
-        return bolt_jwt_encode(cJson, cSecret, nExpires)
+        return bolt_jwt_encode(aData, cSecret, nExpires)
     }
 
     /// @brief Decodes a JWT token and returns the payload.
