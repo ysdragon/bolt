@@ -112,6 +112,7 @@ pub struct RequestContext {
     pub path: String,
     pub params: HashMap<String, String>,
     pub query: HashMap<String, String>,
+    pub form: HashMap<String, String>,
     pub headers: HashMap<String, String>,
     pub cookies: HashMap<String, String>,
     pub body: Vec<u8>,
@@ -1219,7 +1220,12 @@ async fn handle_request(
     let headers: HashMap<String, String> = req
         .headers()
         .iter()
-        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .map(|(k, v)| {
+            (
+                k.as_str().to_lowercase(),
+                v.to_str().unwrap_or("").to_string(),
+            )
+        })
         .collect();
 
     let cookies: HashMap<String, String> = req
@@ -1239,10 +1245,11 @@ async fn handle_request(
         .map(|s| s.as_str())
         .unwrap_or("");
     let is_multipart = content_type.starts_with("multipart/form-data");
+    let is_form_urlencoded = content_type.starts_with("application/x-www-form-urlencoded");
 
-    let (body_bytes, files) = if is_multipart {
-        let mut form_body = Vec::new();
+    let (body_bytes, files, form) = if is_multipart {
         let mut files = Vec::new();
+        let mut form = HashMap::new();
         let mut multipart = actix_multipart::Multipart::new(req.headers(), payload);
         let mut total_size = 0usize;
 
@@ -1282,18 +1289,11 @@ async fn handle_request(
                     data,
                 });
             } else if !name.is_empty() {
-                if !form_body.is_empty() {
-                    form_body.extend_from_slice(b"&");
-                }
-                let value_str = String::from_utf8_lossy(&data);
-                let encoded_name = urlencoding::encode(&name);
-                let encoded_value = urlencoding::encode(&value_str);
-                form_body.extend_from_slice(encoded_name.as_bytes());
-                form_body.extend_from_slice(b"=");
-                form_body.extend_from_slice(encoded_value.as_bytes());
+                let value_str = String::from_utf8_lossy(&data).to_string();
+                form.insert(name, value_str);
             }
         }
-        (form_body, files)
+        (Vec::new(), files, form)
     } else {
         let mut body = actix_web::web::BytesMut::new();
         while let Some(chunk) = payload.next().await {
@@ -1305,7 +1305,15 @@ async fn handle_request(
             }
             body.extend_from_slice(&chunk);
         }
-        (body.to_vec(), Vec::new())
+        let body_vec = body.to_vec();
+        let form = if is_form_urlencoded {
+            form_urlencoded::parse(&body_vec)
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        (body_vec, Vec::new(), form)
     };
 
     let client_ip_str = req
@@ -1383,6 +1391,7 @@ async fn handle_request(
         path: matched_path,
         params: path_params,
         query: query_inner,
+        form,
         headers,
         cookies,
         body: body_bytes,
@@ -1656,12 +1665,7 @@ ring_func!(bolt_req_header, |p| {
         let server = &*(ptr as *const HttpServer);
         let guard = server.current_request.lock();
         if let Some(ref ctx) = *guard {
-            let value = ctx
-                .headers
-                .iter()
-                .find(|(k, _)| k.to_lowercase() == name)
-                .map(|(_, v)| v.as_str())
-                .unwrap_or("");
+            let value = ctx.headers.get(&name).map(|s| s.as_str()).unwrap_or("");
             ring_ret_string!(p, value);
         } else {
             ring_ret_string!(p, "");
@@ -1691,7 +1695,7 @@ ring_func!(bolt_req_body, |p| {
     }
 });
 
-/// bolt_req_form_field(server, name) -> value from application/x-www-form-urlencoded body
+/// bolt_req_form_field(server, name) -> value from form body (urlencoded or multipart)
 ring_func!(bolt_req_form_field, |p| {
     ring_check_paracount!(p, 2);
     ring_check_cpointer!(p, 1);
@@ -1708,24 +1712,12 @@ ring_func!(bolt_req_form_field, |p| {
         let server = &*(ptr as *const HttpServer);
         let guard = server.current_request.lock();
         if let Some(ref ctx) = *guard {
-            let body_str = String::from_utf8_lossy(&ctx.body);
-            for pair in body_str.split('&') {
-                if let Some(eq) = pair.find('=') {
-                    let key = &pair[..eq];
-                    let val = &pair[eq + 1..];
-                    if let Ok(decoded_key) = urlencoding::decode(key) {
-                        if decoded_key == name {
-                            let decoded_val =
-                                urlencoding::decode(val).unwrap_or_default().to_string();
-                            ring_ret_string!(p, &decoded_val);
-                            return;
-                        }
-                    }
-                }
-            }
+            let value = ctx.form.get(name).map(|s| s.as_str()).unwrap_or("");
+            ring_ret_string!(p, value);
+        } else {
+            ring_ret_string!(p, "");
         }
     }
-    ring_ret_string!(p, "");
 });
 
 /// bolt_req_client_ip(server) -> client IP string
@@ -1919,7 +1911,10 @@ ring_func!(bolt_set_cookie, |p| {
         "Path=/".to_string()
     };
 
-    let cookie = format!("{}={}; {}", name, value, options);
+    let cookie_str = format!("{}={}; {}", name, value, options);
+    let cookie = cookie::Cookie::parse(cookie_str)
+        .map(|c| c.to_string())
+        .unwrap_or_else(|_| format!("{}={}; {}", name, value, options));
 
     unsafe {
         let server = &*(ptr as *const HttpServer);

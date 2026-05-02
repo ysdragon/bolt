@@ -44,7 +44,10 @@ ring_func!(bolt_session_set, |p| {
             server.sessions.insert(session_id.clone(), session);
 
             let mut response = server.current_response.lock();
-            let cookie = format!("BOLTSESSION={}; Path=/; HttpOnly", session_id);
+            let cookie =
+                cookie::Cookie::parse(format!("BOLTSESSION={}; Path=/; HttpOnly", session_id))
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|_| format!("BOLTSESSION={}; Path=/; HttpOnly", session_id));
             if let Some(ref mut res) = *response {
                 if !res.cookies.iter().any(|c| c.starts_with("BOLTSESSION=")) {
                     res.cookies.push(cookie);
