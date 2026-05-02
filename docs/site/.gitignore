@@ -1,0 +1,5 @@
+/public/
+/resources/
+/vendor/
+/_vendor/
+.hugo_build.lock

@@ -1,0 +1,162 @@
+.home-highlight {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+@media (prefers-color-scheme: dark) {
+    .home-highlight {
+        background: linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+}
+
+/* Fix Chroma ring lexer: treat # as comment instead of error */
+.language-ring .err {
+    color: #75715e !important;
+    background-color: transparent !important;
+}
+
+/* ── Benchmark table ── */
+.benchmark-table-wrapper {
+    overflow-x: auto;
+    margin: 1.5rem 0;
+    border-radius: 0.75rem;
+}
+
+.benchmark-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    font-size: 0.9rem;
+}
+
+.benchmark-table th {
+    background: #f1f5f9;
+    font-weight: 600;
+    text-align: left;
+    padding: 0.75rem 1rem;
+    border-bottom: 2px solid #e2e8f0;
+    white-space: nowrap;
+}
+
+.benchmark-table th.num,
+.benchmark-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.benchmark-table th.bar-col,
+.benchmark-table td.bar-col {
+    width: 40%;
+}
+
+.benchmark-table td {
+    padding: 0.65rem 1rem;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+}
+
+/* Row color coding */
+.benchmark-table .bm-faster td { background: rgba(34, 197, 94, 0.04); }
+.benchmark-table .bm-bolt td   { background: rgba(99, 102, 241, 0.08); }
+.benchmark-table .bm-slower td { background: rgba(239, 68, 68, 0.03); }
+
+.benchmark-table tbody tr:hover td {
+    background: rgba(99, 102, 241, 0.06) !important;
+}
+
+/* Bolt row highlight */
+.benchmark-table .bm-bolt td {
+    border-top: 2px solid rgba(99, 102, 241, 0.25);
+    border-bottom: 2px solid rgba(99, 102, 241, 0.25);
+    font-size: 0.95rem;
+}
+
+/* Throughput bar */
+.bar-col .bar {
+    height: 22px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #e2e8f0, #cbd5e1);
+    min-width: 3px;
+}
+
+.bar-col .bar-bolt {
+    background: linear-gradient(90deg, #818cf8, #6366f1);
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.3);
+}
+
+.bm-faster .bar-col .bar {
+    background: linear-gradient(90deg, #86efac, #22c55e);
+}
+
+.bm-slower .bar-col .bar {
+    background: linear-gradient(90deg, #fecaca, #f87171);
+    opacity: 0.7;
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.badge-faster { background: #dcfce7; color: #166534; }
+.badge-bolt   { background: #e0e7ff; color: #3730a3; }
+.badge-slower { background: #fee2e2; color: #991b1b; }
+
+/* ── Dark mode ── */
+@media (prefers-color-scheme: dark) {
+    .benchmark-table {
+        border-color: #334155;
+    }
+
+    .benchmark-table th {
+        background: #1e293b;
+        border-bottom-color: #334155;
+    }
+
+    .benchmark-table td {
+        border-bottom-color: #1e293b;
+    }
+
+    .benchmark-table .bm-faster td { background: rgba(34, 197, 94, 0.06); }
+    .benchmark-table .bm-bolt td   { background: rgba(129, 140, 248, 0.1); }
+    .benchmark-table .bm-slower td { background: rgba(248, 113, 113, 0.04); }
+
+    .benchmark-table .bm-bolt td {
+        border-top-color: rgba(129, 140, 248, 0.3);
+        border-bottom-color: rgba(129, 140, 248, 0.3);
+    }
+
+    .bm-faster .bar-col .bar {
+        background: linear-gradient(90deg, #166534, #22c55e);
+    }
+
+    .bar-col .bar-bolt {
+        background: linear-gradient(90deg, #6366f1, #818cf8);
+        box-shadow: 0 0 10px rgba(129, 140, 248, 0.35);
+    }
+
+    .bm-slower .bar-col .bar {
+        background: linear-gradient(90deg, #7f1d1d, #f87171);
+    }
+
+    .bar-col .bar:not(.bar-bolt) {
+        opacity: 0.65;
+    }
+
+    .badge-faster { background: #052e16; color: #86efac; }
+    .badge-bolt   { background: #1e1b4b; color: #c7d2fe; }
+    .badge-slower { background: #450a0a; color: #fca5a5; }
+}
