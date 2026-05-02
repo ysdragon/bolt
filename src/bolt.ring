@@ -27,8 +27,10 @@ $bolt_last_route = ""
 class Bolt {
 
     pHandle = NULL
-    nPort = 3000
-    cHost = "0.0.0.0"
+    port = 3000
+    host = "0.0.0.0"
+    nPort = port
+    cHost = host
     aRoutes = []
 
     /// @brief Initializes a new Bolt server instance.
