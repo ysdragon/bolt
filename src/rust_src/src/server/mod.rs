@@ -924,7 +924,33 @@ async fn run_server(
                         ),
                     );
                 }
-                _ => {}
+                _ => {
+                    let custom_method = route.method.clone();
+                    match actix_web::http::Method::from_bytes(custom_method.as_bytes()) {
+                        Ok(method) => {
+                            app = app.route(
+                                &path,
+                                web::route().method(method).to(
+                                    move |req, state, query, payload| {
+                                        handle_request(
+                                            req,
+                                            state,
+                                            query,
+                                            payload,
+                                            handler_name.clone(),
+                                        )
+                                    },
+                                ),
+                            );
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "[bolt] Warning: invalid HTTP method '{}' for route {}",
+                                custom_method, path
+                            );
+                        }
+                    }
+                }
             }
         }
 
@@ -3551,7 +3577,26 @@ mod tests {
                         test_handle_request_core(req, state, query, payload, handler_name.clone())
                     }),
                 ),
-                _ => app,
+                _ => {
+                    let custom_method = route.method.clone();
+                    match actix_web::http::Method::from_bytes(custom_method.as_bytes()) {
+                        Ok(method) => app.route(
+                            &path,
+                            web::route()
+                                .method(method)
+                                .to(move |req, state, query, payload| {
+                                    test_handle_request_core(
+                                        req,
+                                        state,
+                                        query,
+                                        payload,
+                                        handler_name.clone(),
+                                    )
+                                }),
+                        ),
+                        Err(_) => app,
+                    }
+                }
             };
         }
 
