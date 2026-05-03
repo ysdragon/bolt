@@ -87,7 +87,7 @@ enableTls("cert.pem", "key.pem")
 ```
 
 ### enableCompression() / disableCompression()
-Enable or disable response compression (gzip/deflate).
+Enable or disable response compression (brotli/gzip).
 
 ```ring
 enableCompression()

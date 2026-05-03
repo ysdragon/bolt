@@ -92,7 +92,7 @@ ring app.ring
 
 **Developer Experience**
 - Auto-generated OpenAPI docs at `/docs`
-- Built-in gzip/deflate compression
+- Built-in brotli/gzip compression
 - Request logging with configurable levels
 - Homepage helper for instant landing pages
 
