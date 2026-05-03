@@ -975,8 +975,8 @@ class Bolt {
     // CSRF Protection
     // ========================================
 
-    /// @brief Enables CSRF protection with a secret key.
-    /// @param cSecret CSRF secret key.
+    /// @brief Enables CSRF protection with a secret key. Must be called before defining routes.
+    /// @param cSecret HMAC secret key used to sign CSRF tokens.
     func enableCsrf(cSecret) {
         bolt_enable_csrf(pHandle, cSecret)
     }
@@ -1502,18 +1502,18 @@ class Bolt {
         return getSession("_flash_" + cKey) != NULL
     }
 
-    /// @brief Generates a CSRF token.
+    /// @brief Generates a session-bound CSRF token (session_id.timestamp.hmac).
+    /// Also sets a BOLTSESSION cookie if the client doesn't already have one.
     /// @return CSRF token string.
     func csrfToken() {
-        return bolt_csrf_token()
+        return bolt_csrf_token(pHandle)
     }
 
-    /// @brief Verifies a CSRF token.
+    /// @brief Verifies a CSRF token (checks session binding + HMAC signature + 1h expiry).
     /// @param cToken Token to verify.
-    /// @param cExpected Expected token value.
     /// @return True (1) if valid, false (0) otherwise.
-    func verifyCsrf(cToken, cExpected) {
-        return bolt_verify_csrf(cToken, cExpected)
+    func verifyCsrf(cToken) {
+        return bolt_verify_csrf(pHandle, cToken)
     }
 
     // ========================================

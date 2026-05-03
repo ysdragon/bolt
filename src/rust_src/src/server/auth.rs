@@ -4,6 +4,7 @@
 
 //! Authentication: JWT, CSRF, Basic Auth
 
+use super::{HttpServer, PendingResponse, ResponseBody};
 use crate::ring_list_to_json;
 use ring_lang_rs::*;
 use serde::{Deserialize, Serialize};
@@ -35,9 +36,16 @@ ring_func!(bolt_enable_csrf, |p| {
     ring_ret_number!(p, 1.0);
 });
 
-/// bolt_csrf_token() -> generate signed CSRF token (uuid.timestamp.hmac)
+/// bolt_csrf_token(server) -> generate signed CSRF token (session_id.timestamp.hmac)
 ring_func!(bolt_csrf_token, |p| {
-    ring_check_paracount!(p, 0);
+    ring_check_paracount!(p, 1);
+    ring_check_cpointer!(p, 1);
+
+    let ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
+    if ptr.is_null() {
+        ring_ret_string!(p, "");
+        return;
+    }
 
     let secret = CSRF_SECRET.get().map(|s: &String| s.as_str()).unwrap_or("");
     if secret.is_empty() {
@@ -45,12 +53,54 @@ ring_func!(bolt_csrf_token, |p| {
         return;
     }
 
-    let uuid = uuid::Uuid::new_v4().to_string();
+    let session_id = unsafe {
+        let server = &*(ptr as *mut HttpServer);
+        let guard = server.current_request.lock();
+        guard
+            .as_ref()
+            .map(|ctx| ctx.session_id.clone())
+            .unwrap_or_default()
+    };
+
+    if session_id.is_empty() {
+        ring_ret_string!(p, "");
+        return;
+    }
+
+    // Ensure BOLTSESSION cookie is set in response so client returns it
+    unsafe {
+        let server = &*(ptr as *const HttpServer);
+        let has_session_cookie = {
+            let guard = server.current_request.lock();
+            guard
+                .as_ref()
+                .map(|ctx| ctx.cookies.contains_key("BOLTSESSION"))
+                .unwrap_or(false)
+        };
+        if !has_session_cookie {
+            let cookie_val = format!("BOLTSESSION={}; Path=/; HttpOnly", session_id);
+            let mut response = server.current_response.lock();
+            if let Some(ref mut res) = *response {
+                if !res.cookies.iter().any(|c| c.starts_with("BOLTSESSION=")) {
+                    res.cookies.push(cookie_val);
+                }
+            } else {
+                *response = Some(PendingResponse {
+                    status: 200,
+                    headers: std::collections::HashMap::new(),
+                    cookies: vec![cookie_val],
+                    body: ResponseBody::Bytes(Vec::new()),
+                    only_headers: true,
+                });
+            }
+        }
+    }
+
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let payload = format!("{}.{}", uuid, timestamp);
+    let payload = format!("{}.{}", session_id, timestamp);
 
     type HmacSha256 = hmac::Hmac<sha2::Sha256>;
     use hmac::Mac;
@@ -62,16 +112,20 @@ ring_func!(bolt_csrf_token, |p| {
     ring_ret_string!(p, &token);
 });
 
-/// bolt_verify_csrf(token, expected) -> 1 if valid (checks HMAC + 1h expiry)
+/// bolt_verify_csrf(server, token) -> 1 if valid (checks session_id + HMAC + 1h expiry)
 ring_func!(bolt_verify_csrf, |p| {
     ring_check_paracount!(p, 2);
-    ring_check_string!(p, 1);
+    ring_check_cpointer!(p, 1);
     ring_check_string!(p, 2);
 
-    let token = ring_get_string!(p, 1);
-    let expected = ring_get_string!(p, 2);
+    let ptr = ring_api_getcpointer(p, 1, HTTP_SERVER_TYPE);
+    if ptr.is_null() {
+        ring_ret_number!(p, 0.0);
+        return;
+    }
 
-    if token != expected || token.is_empty() {
+    let token = ring_get_string!(p, 2);
+    if token.is_empty() {
         ring_ret_number!(p, 0.0);
         return;
     }
@@ -82,6 +136,7 @@ ring_func!(bolt_verify_csrf, |p| {
         return;
     }
 
+    // Parse: session_id.timestamp.hmac(16)
     let last_dot = match token.rfind('.') {
         Some(pos) => pos,
         None => {
@@ -104,6 +159,7 @@ ring_func!(bolt_verify_csrf, |p| {
             return;
         }
     };
+    let token_session_id = &payload[..payload_dot];
     let timestamp: u64 = match payload[payload_dot + 1..].parse() {
         Ok(t) => t,
         Err(_) => {
@@ -111,6 +167,21 @@ ring_func!(bolt_verify_csrf, |p| {
             return;
         }
     };
+
+    // Verify session binding
+    let current_session_id = unsafe {
+        let server = &*(ptr as *mut HttpServer);
+        let guard = server.current_request.lock();
+        guard
+            .as_ref()
+            .map(|ctx| ctx.session_id.clone())
+            .unwrap_or_default()
+    };
+
+    if current_session_id.is_empty() || token_session_id != current_session_id {
+        ring_ret_number!(p, 0.0);
+        return;
+    }
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -136,7 +207,6 @@ ring_func!(bolt_verify_csrf, |p| {
     for (a, b) in provided_sig.bytes().zip(expected_sig.bytes()) {
         diff |= a ^ b;
     }
-
     ring_ret_number!(p, if diff == 0 { 1.0 } else { 0.0 });
 });
 
