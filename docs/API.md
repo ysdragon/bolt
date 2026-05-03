@@ -983,7 +983,7 @@ ok
 Encode Basic Auth credentials.
 
 ```ring
-auth = $bolt.basicAuthEncode("user", "pass")  # "dXNlcjpwYXNz"
+auth = $bolt.basicAuthEncode("user", "pass")  # "Basic dXNlcjpwYXNz"
 ```
 
 ---
@@ -991,25 +991,25 @@ auth = $bolt.basicAuthEncode("user", "pass")  # "dXNlcjpwYXNz"
 ## Security
 
 ### enableCsrf(cSecret)
-Enable CSRF protection.
+Enable CSRF protection. Must be called before defining routes. The secret is used to HMAC-sign session-bound tokens.
 
 ```ring
 enableCsrf("my-csrf-secret")
 ```
 
 ### $bolt.csrfToken()
-Generate CSRF token for forms.
+Generate a session-bound CSRF token (format: `session_id.timestamp.hmac`). Also sets a `BOLTSESSION` cookie if the client doesn't already have one.
 
 ```ring
 token = $bolt.csrfToken()
 # Include in form: <input type="hidden" name="_csrf" value="{{ token }}">
 ```
 
-### $bolt.verifyCsrf(cToken, cExpected)
-Verify CSRF token.
+### $bolt.verifyCsrf(cToken)
+Verify CSRF token. Checks session binding, HMAC signature, and 1-hour expiry. Returns 1 if valid, 0 otherwise.
 
 ```ring
-if $bolt.verifyCsrf($bolt.formField("_csrf"), $bolt.csrfToken())
+if $bolt.verifyCsrf($bolt.formField("_csrf"))
     # Valid request
 ok
 ```

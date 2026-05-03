@@ -53,5 +53,5 @@ ok
 Encode Basic Auth credentials.
 
 ```ring
-auth = $bolt.basicAuthEncode("user", "pass")  # "dXNlcjpwYXNz"
+auth = $bolt.basicAuthEncode("user", "pass")  # "Basic dXNlcjpwYXNz"
 ```

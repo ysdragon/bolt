@@ -26,9 +26,8 @@ new Bolt() {
     # Verify CSRF on submit
     @post("/submit", func {
         token = $bolt.formField("_csrf")
-        expected = $bolt.csrfToken()
         
-        if !$bolt.verifyCsrf(token, expected)
+        if !$bolt.verifyCsrf(token)
             $bolt.forbidden()
             return
         ok
