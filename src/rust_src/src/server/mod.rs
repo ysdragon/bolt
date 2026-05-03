@@ -66,11 +66,11 @@ impl Expiry<String, (String, u64)> for BoltCacheExpiry {
         value: &(String, u64),
         _created_at: std::time::Instant,
     ) -> Option<Duration> {
-        let ttl = value.1;
+        let ttl = if value.1 > 0 { value.1 } else { self.0 };
         if ttl > 0 {
             Some(Duration::from_secs(ttl))
         } else {
-            Some(Duration::from_secs(self.0))
+            None
         }
     }
 
@@ -81,11 +81,11 @@ impl Expiry<String, (String, u64)> for BoltCacheExpiry {
         _updated_at: std::time::Instant,
         _duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
-        let ttl = value.1;
+        let ttl = if value.1 > 0 { value.1 } else { self.0 };
         if ttl > 0 {
             Some(Duration::from_secs(ttl))
         } else {
-            Some(Duration::from_secs(self.0))
+            None
         }
     }
 }
@@ -1222,12 +1222,7 @@ async fn handle_request(
     let headers: HashMap<String, String> = req
         .headers()
         .iter()
-        .map(|(k, v)| {
-            (
-                k.as_str().to_lowercase(),
-                v.to_str().unwrap_or("").to_string(),
-            )
-        })
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
         .collect();
 
     let cookies: HashMap<String, String> = req
@@ -3426,7 +3421,7 @@ mod tests {
         let headers: HashMap<String, String> = req
             .headers()
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
         let cookies: HashMap<String, String> = req
