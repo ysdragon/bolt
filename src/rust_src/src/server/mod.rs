@@ -311,6 +311,7 @@ pub struct HttpServer {
     pub server_shutdown_tx: tokio::sync::broadcast::Sender<()>,
     pub template_cache: Arc<std::sync::RwLock<HashMap<String, (String, u64)>>>,
     pub regex_cache: Arc<Mutex<HashMap<String, regex::Regex>>>,
+    pub csrf_secret: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -368,6 +369,7 @@ impl HttpServer {
             server_shutdown_tx: tokio::sync::broadcast::channel(1).0,
             template_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             regex_cache: Arc::new(Mutex::new(HashMap::new())),
+            csrf_secret: None,
         };
         server
     }
@@ -658,18 +660,27 @@ ring_func!(bolt_listen, |p| {
             Arc<governor::DefaultKeyedRateLimiter<String>>,
         >::new());
 
+        let old_cache = server.cache.clone();
         server.cache = Arc::new(
             Cache::builder()
                 .max_capacity(server.config.cache_max_capacity)
                 .expire_after(BoltCacheExpiry(server.config.cache_ttl_secs))
                 .build(),
         );
+        for (k, v) in old_cache.iter() {
+            server.cache.insert((*k).clone(), v.clone());
+        }
+
+        let old_sessions = server.sessions.clone();
         server.sessions = Arc::new(
             Cache::builder()
                 .max_capacity(server.config.session_max_capacity)
                 .time_to_live(Duration::from_secs(server.config.session_ttl_secs))
                 .build(),
         );
+        for (k, v) in old_sessions.iter() {
+            server.sessions.insert((*k).clone(), v.clone());
+        }
 
         let system = actix_web::rt::System::new();
         system.block_on(async {
@@ -779,16 +790,31 @@ async fn run_server(
                                 .iter()
                                 .find(|r| r.handler_name == handler_name);
 
+                            let mut aborted = false;
+
                             for bh in &before_handlers {
                                 ring_vm_callfunction_str(vm_ptr as RingVM, bh);
-                            }
-                            if let Some(rd) = route_def {
-                                for bh in &rd.before_middleware {
-                                    ring_vm_callfunction_str(vm_ptr as RingVM, bh);
+                                if current_response.lock().is_some() {
+                                    aborted = true;
+                                    break;
                                 }
                             }
 
-                            ring_vm_callfunction_str(vm_ptr as RingVM, &handler_name);
+                            if !aborted {
+                                if let Some(rd) = route_def {
+                                    for bh in &rd.before_middleware {
+                                        ring_vm_callfunction_str(vm_ptr as RingVM, bh);
+                                        if current_response.lock().is_some() {
+                                            aborted = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !aborted {
+                                ring_vm_callfunction_str(vm_ptr as RingVM, &handler_name);
+                            }
 
                             if let Some(rd) = route_def {
                                 for ah in &rd.after_middleware {
@@ -1261,6 +1287,7 @@ async fn handle_request(
         })
         .unwrap_or_default();
 
+    let request_id_str = uuid::Uuid::new_v4().to_string();
     let request_id = next_request_id();
 
     let content_type = headers
@@ -1299,7 +1326,7 @@ async fn handle_request(
                 total_size += bytes.len();
                 if total_size > state.body_size_limit {
                     return HttpResponse::PayloadTooLarge()
-                        .insert_header(("X-Request-Id", format!("{:x}", request_id)))
+                        .insert_header(("X-Request-Id", request_id_str.clone()))
                         .body("Payload Too Large");
                 }
             }
@@ -1323,7 +1350,7 @@ async fn handle_request(
             let chunk: actix_web::web::Bytes = chunk.unwrap_or_default();
             if body.len() + chunk.len() > state.body_size_limit {
                 return HttpResponse::PayloadTooLarge()
-                    .insert_header(("X-Request-Id", format!("{:x}", request_id)))
+                    .insert_header(("X-Request-Id", request_id_str.clone()))
                     .body("Payload Too Large");
             }
             body.extend_from_slice(&chunk);
@@ -1358,13 +1385,13 @@ async fn handle_request(
             && !state.ip_whitelist.iter().any(|net| net.contains(parsed_ip))
         {
             return HttpResponse::Forbidden()
-                .insert_header(("X-Request-Id", format!("{:x}", request_id)))
+                .insert_header(("X-Request-Id", request_id_str.clone()))
                 .body("Forbidden");
         }
 
         if state.ip_blacklist.iter().any(|net| net.contains(parsed_ip)) {
             return HttpResponse::Forbidden()
-                .insert_header(("X-Request-Id", format!("{:x}", request_id)))
+                .insert_header(("X-Request-Id", request_id_str.clone()))
                 .body("Forbidden");
         }
     }
@@ -1381,15 +1408,18 @@ async fn handle_request(
             .or_insert_with(|| {
                 let burst =
                     NonZeroU32::new(max_req as u32).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
-                let period = (Duration::from_secs(window_secs.max(1)) / max_req.max(1) as u32)
-                    .max(Duration::from_nanos(1));
-                let quota = Quota::with_period(period).unwrap().allow_burst(burst);
+                let max_req_u32 = (max_req as u32).max(1);
+                let window_nanos = Duration::from_secs(window_secs.max(1)).as_nanos();
+                let period_nanos = (window_nanos / max_req_u32 as u128).max(1) as u64;
+                let quota = Quota::with_period(Duration::from_nanos(period_nanos))
+                    .unwrap()
+                    .allow_burst(burst);
                 Arc::new(RateLimiter::keyed(quota))
             })
             .clone();
         if limiter.check_key(&client_ip_str).is_err() {
             return HttpResponse::TooManyRequests()
-                .insert_header(("X-Request-Id", format!("{:x}", request_id)))
+                .insert_header(("X-Request-Id", request_id_str.clone()))
                 .body("Too Many Requests");
         }
     }
@@ -1409,7 +1439,7 @@ async fn handle_request(
         .unwrap_or_default();
     let ctx = RequestContext {
         id: request_id,
-        request_id: String::new(),
+        request_id: request_id_str.clone(),
         method,
         path: matched_path,
         params: path_params,
@@ -1437,7 +1467,7 @@ async fn handle_request(
         None
     };
 
-    let req_id_header = format!("{:x}", request_id);
+    let req_id_header = request_id_str.clone();
 
     let http_response = match response {
         Some(res) => {
@@ -1576,7 +1606,7 @@ ring_func!(bolt_req_method, |p| {
     }
 });
 
-/// bolt_req_request_id(server) -> string (UUID, lazily generated on first call)
+/// bolt_req_request_id(server) -> string (UUID)
 ring_func!(bolt_req_request_id, |p| {
     ring_check_paracount!(p, 1);
     ring_check_cpointer!(p, 1);
@@ -1588,11 +1618,8 @@ ring_func!(bolt_req_request_id, |p| {
 
     unsafe {
         let server = &*(ptr as *const HttpServer);
-        let mut guard = server.current_request.lock();
-        if let Some(ref mut ctx) = *guard {
-            if ctx.request_id.is_empty() {
-                ctx.request_id = uuid::Uuid::new_v4().to_string();
-            }
+        let guard = server.current_request.lock();
+        if let Some(ref ctx) = *guard {
             ring_ret_string!(p, &ctx.request_id);
         } else {
             ring_ret_string!(p, "");
@@ -3460,8 +3487,9 @@ mod tests {
             })
             .unwrap_or_default();
 
+        let request_id_str = uuid::Uuid::new_v4().to_string();
         let request_id = next_request_id();
-        let req_id_header = format!("{:x}", request_id);
+        let req_id_header = request_id_str.clone();
 
         // Check IP filtering if configured
         let client_ip_str = req

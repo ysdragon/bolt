@@ -8,15 +8,12 @@ use super::{HttpServer, PendingResponse, ResponseBody};
 use crate::ring_list_to_json;
 use ring_lang_rs::*;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 
 use crate::HTTP_SERVER_TYPE;
 
 // ========================================
 // CSRF
 // ========================================
-
-static CSRF_SECRET: OnceLock<String> = OnceLock::new();
 
 /// bolt_enable_csrf(server, secret) - enable CSRF protection
 ring_func!(bolt_enable_csrf, |p| {
@@ -31,7 +28,10 @@ ring_func!(bolt_enable_csrf, |p| {
 
     let secret = ring_get_string!(p, 2);
 
-    let _ = CSRF_SECRET.set(secret.to_string());
+    unsafe {
+        let server = &mut *(ptr as *mut HttpServer);
+        server.csrf_secret = Some(secret.to_string());
+    }
 
     ring_ret_number!(p, 1.0);
 });
@@ -47,7 +47,10 @@ ring_func!(bolt_csrf_token, |p| {
         return;
     }
 
-    let secret = CSRF_SECRET.get().map(|s: &String| s.as_str()).unwrap_or("");
+    let secret = unsafe {
+        let server = &*(ptr as *const HttpServer);
+        server.csrf_secret.clone().unwrap_or_default()
+    };
     if secret.is_empty() {
         ring_ret_string!(p, "");
         return;
@@ -130,7 +133,10 @@ ring_func!(bolt_verify_csrf, |p| {
         return;
     }
 
-    let secret = CSRF_SECRET.get().map(|s: &String| s.as_str()).unwrap_or("");
+    let secret = unsafe {
+        let server = &*(ptr as *const HttpServer);
+        server.csrf_secret.clone().unwrap_or_default()
+    };
     if secret.is_empty() {
         ring_ret_number!(p, 0.0);
         return;

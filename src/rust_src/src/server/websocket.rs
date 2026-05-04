@@ -107,7 +107,7 @@ pub(crate) async fn handle_websocket(
         while let Some(Ok(msg)) = msg_stream.recv().await {
             match msg {
                 actix_ws::Message::Text(text) => {
-                    let trimmed_text = text.trim().to_string();
+                    let trimmed_text = text.to_string();
 
                     if let Some(ref handler) = on_message {
                         let (done_tx, done_rx) = tokio::sync::oneshot::channel();

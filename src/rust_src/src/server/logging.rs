@@ -38,6 +38,11 @@ ring_func!(bolt_log, |p| {
     ring_check_paracount_range!(p, 1, 2);
     ring_check_string!(p, 1);
 
+    if !LOGGING_ENABLED.load(std::sync::atomic::Ordering::SeqCst) {
+        ring_ret_number!(p, 1.0);
+        return;
+    }
+
     let message = ring_get_string!(p, 1);
     let level = if ring_api_paracount(p) >= 2 && ring_api_isstring(p, 2) {
         ring_get_string!(p, 2).to_string()

@@ -20,11 +20,15 @@ ring_func!(bolt_aes_encrypt, |p| {
     let plaintext = ring_get_string!(p, 1);
     let key_str = ring_get_string!(p, 2);
 
-    // Key must be 32 bytes; pad or truncate
     let mut key_bytes = [0u8; 32];
     let kb = key_str.as_bytes();
-    let len = kb.len().min(32);
-    key_bytes[..len].copy_from_slice(&kb[..len]);
+    if kb.len() == 32 {
+        key_bytes.copy_from_slice(kb);
+    } else {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(kb);
+        key_bytes.copy_from_slice(&hash);
+    }
 
     let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
     let cipher = Aes256Gcm::new(key);
@@ -57,8 +61,13 @@ ring_func!(bolt_aes_decrypt, |p| {
 
     let mut key_bytes = [0u8; 32];
     let kb = key_str.as_bytes();
-    let len = kb.len().min(32);
-    key_bytes[..len].copy_from_slice(&kb[..len]);
+    if kb.len() == 32 {
+        key_bytes.copy_from_slice(kb);
+    } else {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(kb);
+        key_bytes.copy_from_slice(&hash);
+    }
 
     use base64::Engine;
     let combined = match base64::engine::general_purpose::STANDARD.decode(ciphertext_b64) {
