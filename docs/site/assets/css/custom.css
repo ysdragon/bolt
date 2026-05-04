@@ -22,26 +22,32 @@
 
 /* ── Benchmark table ── */
 .benchmark-table-wrapper {
-    overflow-x: auto;
     margin: 1.5rem 0;
-    border-radius: 0.75rem;
 }
 
 .benchmark-table {
     width: 100%;
+    table-layout: fixed;
     border-collapse: separate;
     border-spacing: 0;
     border-radius: 0.75rem;
     overflow: hidden;
     border: 1px solid #e2e8f0;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
 }
+
+.benchmark-table col:nth-child(1) { width: 18%; }
+.benchmark-table col:nth-child(2) { width: 9%;  }
+.benchmark-table col:nth-child(3) { width: 16%; }
+.benchmark-table col:nth-child(4) { width: 14%; }
+.benchmark-table col:nth-child(5) { width: 14%; }
+.benchmark-table col:nth-child(6) { width: 29%; }
 
 .benchmark-table th {
     background: #f1f5f9;
     font-weight: 600;
     text-align: left;
-    padding: 0.75rem 1rem;
+    padding: 0.65rem 0.5rem;
     border-bottom: 2px solid #e2e8f0;
     white-space: nowrap;
 }
@@ -50,15 +56,17 @@
 .benchmark-table td.num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding: 0.65rem 0.5rem;
 }
 
-.benchmark-table th.bar-col,
-.benchmark-table td.bar-col {
-    width: 40%;
+.benchmark-table th:last-child,
+.benchmark-table td:last-child {
+    white-space: normal;
 }
 
 .benchmark-table td {
-    padding: 0.65rem 1rem;
+    padding: 0.55rem 0.5rem;
     border-bottom: 1px solid #f1f5f9;
     vertical-align: middle;
 }

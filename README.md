@@ -108,21 +108,23 @@ ring app.ring
 
 ## 📊 Benchmarks
 
-Hello-world endpoint tested with `wrk -t4 -c100 -d10s` on a Ryzen 9 7950x VM.
+Hello-world endpoint tested with `wrk -t8 -c100 -d10s` (5s warmup) on a Ryzen 9 7950x VM (12 vCPUs).
 
 | Framework | Language | Requests/sec | vs Bolt |
 |-----------|----------|-------------|---------|
-| Actix-web | Rust | 490,787 | 1.6x faster |
-| Fiber | Go | 320,953 | 1.1x faster |
-| **Bolt** | **Ring/Rust** | **298,189** | **—** |
-| Axum | Rust | 267,995 | 1.1x slower |
-| Gin | Go | 227,923 | 1.3x slower |
-| Bun | JS | 158,280 | 1.9x slower |
-| Express/Bun | JS | 65,388 | 4.6x slower |
-| Express/Node | JS | 38,506 | 7.7x slower |
-| FastAPI | Python | 10,219 | 29x slower |
-| Flask | Python | 2,338 | 128x slower |
-| Ring HTTPLib | Ring/C++ | 221 | 1349x slower |
+| Actix-web | Rust | 785,403 | 2.3x faster |
+| ASP.NET | .NET | 529,987 | 1.5x faster |
+| Fiber | Go | 500,740 | 1.5x faster |
+| Java Virtual Threads | Java | 487,340 | 1.4x faster |
+| **Bolt** | **Ring/Rust** | **342,610** | **—** |
+| Gin | Go | 296,610 | 1.2x slower |
+| Bun | JS | 153,550 | 2.2x slower |
+| Elysia | Bun | 152,201 | 2.3x slower |
+| NestJS+Fastify/Node | JS | 67,382 | 5.1x slower |
+| Express/Bun | JS | 58,397 | 5.9x slower |
+| Flask | Python | 48,851 | 7.0x slower |
+| Express/Node | JS | 39,571 | 8.7x slower |
+| FastAPI | Python | 2,153 | 159x slower |
 
 ---
 
