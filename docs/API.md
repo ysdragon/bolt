@@ -638,6 +638,13 @@ Clear all session data.
 $bolt.clearSession()
 ```
 
+### $bolt.regenerateSession()
+Regenerate session ID, migrate data, and invalidate the old session. Prevents session fixation attacks. Call after login or privilege escalation.
+
+```ring
+$bolt.regenerateSession()
+```
+
 ### $bolt.setFlash(cKey, cValue)
 Set flash message (one-time session data).
 

@@ -103,6 +103,26 @@ new Bolt() {
 })
 ```
 
+### Session Regeneration
+
+Regenerate the session ID after login to prevent session fixation attacks. Data is migrated to the new session; the old session is invalidated.
+
+```ring
+@post("/login", func {
+    username = $bolt.formField("username")
+    password = $bolt.formField("password")
+    
+    if username = "admin" and password = "secret"
+        $bolt.regenerateSession()   # new session ID, old one invalidated
+        $bolt.setSession("user_id", "1")
+        $bolt.setSession("role", "admin")
+        $bolt.redirect("/dashboard")
+    else
+        $bolt.badRequest("Invalid credentials")
+    ok
+})
+```
+
 ### Flash Messages
 
 ```ring
