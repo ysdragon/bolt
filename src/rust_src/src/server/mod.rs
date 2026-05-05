@@ -3619,7 +3619,6 @@ mod tests {
             .unwrap_or_default();
 
         let request_id_str = uuid::Uuid::new_v4().to_string();
-        let request_id = next_request_id();
         let req_id_header = request_id_str.clone();
 
         // Check IP filtering if configured
