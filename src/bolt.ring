@@ -657,6 +657,12 @@ class Bolt {
         bolt_session_clear(pHandle)
     }
 
+    /// @brief Regenerates the session ID, migrates data, and invalidates the old session.
+    /// Prevents session fixation attacks. Call after login or privilege escalation.
+    func regenerateSession() {
+        bolt_session_regenerate(pHandle)
+    }
+
     // ========================================
     // File Uploads
     // ========================================
