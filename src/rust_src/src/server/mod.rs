@@ -312,6 +312,7 @@ pub struct HttpServer {
     pub template_cache: Arc<std::sync::RwLock<HashMap<String, (String, u64)>>>,
     pub regex_cache: Arc<Mutex<HashMap<String, regex::Regex>>>,
     pub csrf_secret: Option<String>,
+    pub body_size_limit: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Clone, Debug)]
@@ -370,6 +371,7 @@ impl HttpServer {
             template_cache: Arc::new(std::sync::RwLock::new(HashMap::new())),
             regex_cache: Arc::new(Mutex::new(HashMap::new())),
             csrf_secret: None,
+            body_size_limit: Arc::new(std::sync::atomic::AtomicUsize::new(50 * 1024 * 1024)),
         };
         server
     }
@@ -476,7 +478,7 @@ pub(crate) struct AppState {
     ip_whitelist: Vec<IpNetwork>,
     ip_blacklist: Vec<IpNetwork>,
     regex_cache: Arc<Mutex<HashMap<String, regex::Regex>>>,
-    body_size_limit: usize,
+    body_size_limit: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Check route constraints (standalone function for AppState)
@@ -649,8 +651,8 @@ ring_func!(bolt_listen, |p| {
         } else {
             server.openapi_spec.clone()
         };
+        let body_size_limit = server.body_size_limit.clone();
 
-        let body_size_limit = server.config.body_size_limit;
         let ip_whitelist = server.config.ip_whitelist.clone();
         let ip_blacklist = server.config.ip_blacklist.clone();
         let request_timeout_ms = server.config.request_timeout_ms;
@@ -753,7 +755,7 @@ async fn run_server(
     current_response: Arc<Mutex<Option<PendingResponse>>>,
     running: Arc<Mutex<bool>>,
     openapi_spec: Option<String>,
-    body_size_limit: usize,
+    body_size_limit: Arc<std::sync::atomic::AtomicUsize>,
     ip_whitelist: Vec<IpNetwork>,
     ip_blacklist: Vec<IpNetwork>,
     request_timeout_ms: u64,
@@ -783,67 +785,112 @@ async fn run_server(
                             handler_name,
                             response_tx,
                         } => {
-                            *current_request.lock() = Some(ctx);
-                            *current_response.lock() = None;
+                            let handler_name_clone = handler_name.clone();
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    *current_request.lock() = Some(ctx);
+                                    *current_response.lock() = None;
 
-                            let route_def = routes_for_vm
-                                .iter()
-                                .find(|r| r.handler_name == handler_name);
+                                    let route_def = routes_for_vm
+                                        .iter()
+                                        .find(|r| r.handler_name == handler_name_clone);
 
-                            let mut aborted = false;
+                                    let mut aborted = false;
 
-                            for bh in &before_handlers {
-                                ring_vm_callfunction_str(vm_ptr as RingVM, bh);
-                                if current_response.lock().is_some() {
-                                    aborted = true;
-                                    break;
-                                }
-                            }
-
-                            if !aborted {
-                                if let Some(rd) = route_def {
-                                    for bh in &rd.before_middleware {
+                                    for bh in &before_handlers {
                                         ring_vm_callfunction_str(vm_ptr as RingVM, bh);
-                                        if current_response.lock().is_some() {
-                                            aborted = true;
-                                            break;
+                                        {
+                                            let guard = current_response.lock();
+                                            if let Some(ref res) = *guard {
+                                                if !res.only_headers {
+                                                    aborted = true;
+                                                    break;
+                                                }
+                                            }
                                         }
                                     }
+
+                                    if !aborted {
+                                        if let Some(rd) = route_def {
+                                            for bh in &rd.before_middleware {
+                                                ring_vm_callfunction_str(vm_ptr as RingVM, bh);
+                                                {
+                                                    let guard = current_response.lock();
+                                                    if let Some(ref res) = *guard {
+                                                        if !res.only_headers {
+                                                            aborted = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if !aborted {
+                                        ring_vm_callfunction_str(
+                                            vm_ptr as RingVM,
+                                            &handler_name_clone,
+                                        );
+                                    }
+
+                                    if let Some(rd) = route_def {
+                                        for ah in &rd.after_middleware {
+                                            ring_vm_callfunction_str(vm_ptr as RingVM, ah);
+                                        }
+                                    }
+                                    for ah in &after_handlers {
+                                        ring_vm_callfunction_str(vm_ptr as RingVM, ah);
+                                    }
+
+                                    let mut response = current_response.lock().take();
+
+                                    if response.as_ref().map_or(true, |r| r.only_headers) {
+                                        if let Some(ref eh) = error_handler_for_vm {
+                                            ring_vm_callfunction_str(vm_ptr as RingVM, eh);
+                                            response = current_response.lock().take();
+                                        }
+                                    }
+
+                                    response
+                                }));
+
+                            match result {
+                                Ok(response) => {
+                                    let _ = response_tx.send(response);
+                                }
+                                Err(_) => {
+                                    eprintln!("[bolt] VM panic in HTTP handler: {}", handler_name);
+                                    *current_request.lock() = None;
+                                    *current_response.lock() = None;
+                                    let _ = response_tx.send(Some(PendingResponse {
+                                        status: 500,
+                                        headers: HashMap::new(),
+                                        cookies: Vec::new(),
+                                        body: ResponseBody::Bytes(
+                                            b"Internal Server Error".to_vec(),
+                                        ),
+                                        only_headers: false,
+                                    }));
                                 }
                             }
-
-                            if !aborted {
-                                ring_vm_callfunction_str(vm_ptr as RingVM, &handler_name);
-                            }
-
-                            if let Some(rd) = route_def {
-                                for ah in &rd.after_middleware {
-                                    ring_vm_callfunction_str(vm_ptr as RingVM, ah);
-                                }
-                            }
-                            for ah in &after_handlers {
-                                ring_vm_callfunction_str(vm_ptr as RingVM, ah);
-                            }
-
-                            let mut response = current_response.lock().take();
-
-                            if response.as_ref().map_or(true, |r| r.only_headers) {
-                                if let Some(ref eh) = error_handler_for_vm {
-                                    ring_vm_callfunction_str(vm_ptr as RingVM, eh);
-                                    response = current_response.lock().take();
-                                }
-                            }
-
-                            let _ = response_tx.send(response);
                         }
                         VmWork::WsEvent {
                             handler_name,
                             ctx,
                             done_tx,
                         } => {
-                            *ws_event_for_vm.lock() = Some(ctx);
-                            ring_vm_callfunction_str(vm_ptr as RingVM, &handler_name);
-                            *ws_event_for_vm.lock() = None;
+                            let handler_name_clone = handler_name.clone();
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    *ws_event_for_vm.lock() = Some(ctx);
+                                    ring_vm_callfunction_str(vm_ptr as RingVM, &handler_name_clone);
+                                    *ws_event_for_vm.lock() = None;
+                                }));
+                            if let Err(_) = result {
+                                eprintln!("[bolt] VM panic in WS handler: {}", handler_name);
+                                *ws_event_for_vm.lock() = None;
+                            }
                             let _ = done_tx.send(());
                         }
                     }
@@ -864,7 +911,7 @@ async fn run_server(
         ip_whitelist,
         ip_blacklist,
         regex_cache: Arc::new(Mutex::new(HashMap::new())),
-        body_size_limit,
+        body_size_limit: body_size_limit.clone(),
     };
 
     let limiters_clone = state.route_limiters.clone();
@@ -883,7 +930,7 @@ async fn run_server(
     let server = ActixHttpServer::new(move || {
         let mut app = App::new()
             .app_data(state_data.clone())
-            .app_data(web::PayloadConfig::new(body_size_limit));
+            .app_data(web::PayloadConfig::new(usize::MAX));
 
         for route in &routes {
             let path = route.path.clone();
@@ -1306,7 +1353,11 @@ async fn handle_request(
         while let Some(field_result) = multipart.next().await {
             let mut field = match field_result {
                 Ok(f) => f,
-                Err(_) => break,
+                Err(_) => {
+                    return HttpResponse::BadRequest()
+                        .insert_header(("X-Request-Id", request_id_str.clone()))
+                        .body("Bad Request");
+                }
             };
 
             let name = field.name().unwrap_or("").to_string();
@@ -1321,10 +1372,21 @@ async fn handle_request(
 
             let mut data = Vec::new();
             while let Some(chunk) = field.next().await {
-                let bytes = chunk.unwrap_or_default();
+                let bytes = match chunk {
+                    Ok(b) => b,
+                    Err(_) => {
+                        return HttpResponse::BadRequest()
+                            .insert_header(("X-Request-Id", request_id_str.clone()))
+                            .body("Bad Request");
+                    }
+                };
                 data.extend_from_slice(&bytes);
                 total_size += bytes.len();
-                if total_size > state.body_size_limit {
+                if total_size
+                    > state
+                        .body_size_limit
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                {
                     return HttpResponse::PayloadTooLarge()
                         .insert_header(("X-Request-Id", request_id_str.clone()))
                         .body("Payload Too Large");
@@ -1347,8 +1409,19 @@ async fn handle_request(
     } else {
         let mut body = actix_web::web::BytesMut::new();
         while let Some(chunk) = payload.next().await {
-            let chunk: actix_web::web::Bytes = chunk.unwrap_or_default();
-            if body.len() + chunk.len() > state.body_size_limit {
+            let chunk: actix_web::web::Bytes = match chunk {
+                Ok(b) => b,
+                Err(_) => {
+                    return HttpResponse::BadRequest()
+                        .insert_header(("X-Request-Id", request_id_str.clone()))
+                        .body("Bad Request");
+                }
+            };
+            if body.len() + chunk.len()
+                > state
+                    .body_size_limit
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
                 return HttpResponse::PayloadTooLarge()
                     .insert_header(("X-Request-Id", request_id_str.clone()))
                     .body("Payload Too Large");
@@ -1789,20 +1862,59 @@ ring_func!(bolt_req_client_ip, |p| {
 
             let is_trusted = proxy_whitelist.is_empty()
                 || proxy_whitelist.iter().any(|allowed| {
-                    peer_addr == allowed
-                        || (allowed.ends_with('.')
-                            && peer_addr.starts_with(allowed.trim_end_matches('.')))
+                    allowed
+                        .parse::<IpNetwork>()
+                        .map(|net| {
+                            peer_addr
+                                .parse::<std::net::IpAddr>()
+                                .map(|ip| net.contains(ip))
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
                 });
 
             if is_trusted {
                 if let Some(forwarded) = ctx.headers.get("x-forwarded-for") {
-                    let ip = forwarded.split(',').next().unwrap_or(forwarded).trim();
-                    ring_ret_string!(p, ip);
-                    return;
+                    let ips: Vec<&str> = forwarded
+                        .split(',')
+                        .map(|s| s.trim())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+
+                    if proxy_whitelist.is_empty() {
+                        // No whitelist: trust the header completely, use leftmost IP
+                        if let Some(first) = ips.first() {
+                            ring_ret_string!(p, first);
+                            return;
+                        }
+                    } else {
+                        // Secure: walk right-to-left, skip trusted proxies,
+                        // return the first untrusted IP (the actual client)
+                        let mut client_ip = peer_addr.clone();
+                        for ip in ips.iter().rev() {
+                            if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
+                                let is_trusted_proxy = proxy_whitelist.iter().any(|allowed| {
+                                    allowed
+                                        .parse::<IpNetwork>()
+                                        .map(|net| net.contains(addr))
+                                        .unwrap_or(false)
+                                });
+                                client_ip = addr.to_string();
+                                if !is_trusted_proxy {
+                                    break;
+                                }
+                            }
+                        }
+                        ring_ret_string!(p, &client_ip);
+                        return;
+                    }
                 }
                 if let Some(real_ip) = ctx.headers.get("x-real-ip") {
-                    ring_ret_string!(p, real_ip.trim());
-                    return;
+                    let trimmed = real_ip.trim();
+                    if !trimmed.is_empty() {
+                        ring_ret_string!(p, trimmed);
+                        return;
+                    }
                 }
             }
 
@@ -1961,6 +2073,17 @@ ring_func!(bolt_set_cookie, |p| {
         "Path=/".to_string()
     };
 
+    // Reject cookie names/values containing control chars or newlines
+    if name.chars().any(|c| c.is_control() || c == ';' || c == '=')
+        || value.chars().any(|c| c.is_control())
+    {
+        ring_error!(
+            p,
+            "Invalid cookie name or value: contains control characters"
+        );
+        return;
+    }
+
     let cookie_str = format!("{}={}; {}", name, value, options);
     let cookie = cookie::Cookie::parse(cookie_str)
         .map(|c| c.to_string())
@@ -1986,7 +2109,6 @@ ring_func!(bolt_set_cookie, |p| {
 });
 
 /// bolt_sign_cookie(value, secret) -> signed value using cookie crate
-/// bolt_sign_cookie(value, secret) -> signed value using cookie crate
 /// Secrets of any length are accepted: short secrets are hashed to 32 bytes via SHA-256
 ring_func!(bolt_sign_cookie, |p| {
     ring_check_paracount!(p, 2);
@@ -2006,7 +2128,13 @@ ring_func!(bolt_sign_cookie, |p| {
 
     let mut jar = CookieJar::new();
     jar.signed_mut(&key).add(Cookie::new("bolt", value));
-    let signed = jar.get("bolt").unwrap().value().to_string();
+    let signed = match jar.get("bolt") {
+        Some(c) => c.value().to_string(),
+        None => {
+            ring_ret_string!(p, "");
+            return;
+        }
+    };
     ring_ret_string!(p, &signed);
 });
 
@@ -2265,6 +2393,9 @@ ring_func!(bolt_set_body_limit, |p| {
     unsafe {
         let server = &mut *(ptr as *mut HttpServer);
         server.config.body_size_limit = bytes;
+        server
+            .body_size_limit
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
     }
 
     ring_ret_number!(p, 1.0);
@@ -3554,7 +3685,7 @@ mod tests {
             ip_whitelist: Vec::new(),
             ip_blacklist: Vec::new(),
             regex_cache: Arc::new(Mutex::new(HashMap::new())),
-            body_size_limit: 50 * 1024 * 1024,
+            body_size_limit: Arc::new(std::sync::atomic::AtomicUsize::new(50 * 1024 * 1024)),
         }
     }
 
@@ -3912,8 +4043,8 @@ mod tests {
         assert!(request_id.is_some());
         let id_str = request_id.unwrap().to_str().unwrap();
         assert!(!id_str.is_empty());
-        // Should be a valid hex number
-        assert!(u64::from_str_radix(id_str, 16).is_ok());
+        // Should be a valid UUID v4
+        assert!(uuid::Uuid::parse_str(id_str).is_ok());
     }
 
     #[actix_web::test]

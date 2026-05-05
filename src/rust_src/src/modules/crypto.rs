@@ -107,7 +107,13 @@ ring_func!(bolt_hmac_sha256, |p| {
     let message = ring_get_string!(p, 1);
     let key = ring_get_string!(p, 2);
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key.as_bytes()).unwrap();
+    let mut mac = match <HmacSha256 as Mac>::new_from_slice(key.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => {
+            ring_ret_string!(p, "");
+            return;
+        }
+    };
     mac.update(message.as_bytes());
     let result = mac.finalize();
     let hex_str = hex::encode(result.into_bytes());
@@ -132,7 +138,13 @@ ring_func!(bolt_hmac_verify, |p| {
         }
     };
 
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key.as_bytes()).unwrap();
+    let mut mac = match <HmacSha256 as Mac>::new_from_slice(key.as_bytes()) {
+        Ok(m) => m,
+        Err(_) => {
+            ring_ret_number!(p, 0.0);
+            return;
+        }
+    };
     mac.update(message.as_bytes());
     let ok = mac.verify_slice(&sig_bytes).is_ok();
     ring_ret_number!(p, if ok { 1.0 } else { 0.0 });

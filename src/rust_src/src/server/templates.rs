@@ -60,7 +60,10 @@ ring_func!(bolt_render_file, |p| {
 
     let template_str = unsafe {
         let server = &*(ptr as *const HttpServer);
-        let cache = server.template_cache.read().unwrap();
+        let cache = server
+            .template_cache
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some((cached_content, cached_mtime)) = cache.get(filepath) {
             if let Ok(meta) = std::fs::metadata(filepath) {
                 if let Ok(mtime) = meta.modified() {
@@ -74,7 +77,10 @@ ring_func!(bolt_render_file, |p| {
                         drop(cache);
                         match std::fs::read_to_string(filepath) {
                             Ok(content) => {
-                                let mut cache = server.template_cache.write().unwrap();
+                                let mut cache = server
+                                    .template_cache
+                                    .write()
+                                    .unwrap_or_else(|e| e.into_inner());
                                 cache.insert(filepath.to_string(), (content.clone(), mtime_secs));
                                 content
                             }
@@ -100,7 +106,10 @@ ring_func!(bolt_render_file, |p| {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
-                    let mut cache = server.template_cache.write().unwrap();
+                    let mut cache = server
+                        .template_cache
+                        .write()
+                        .unwrap_or_else(|e| e.into_inner());
                     cache.insert(filepath.to_string(), (content.clone(), mtime_secs));
                     content
                 }

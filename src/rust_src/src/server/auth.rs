@@ -111,7 +111,7 @@ ring_func!(bolt_csrf_token, |p| {
     mac.update(payload.as_bytes());
     let result = mac.finalize();
     let hmac_hex = hex::encode(result.into_bytes());
-    let token = format!("{}.{}", payload, &hmac_hex[..16]);
+    let token = format!("{}.{}", payload, hmac_hex);
     ring_ret_string!(p, &token);
 });
 
@@ -142,7 +142,7 @@ ring_func!(bolt_verify_csrf, |p| {
         return;
     }
 
-    // Parse: session_id.timestamp.hmac(16)
+    // Parse: session_id.timestamp.hmac(sha256_hex)
     let last_dot = match token.rfind('.') {
         Some(pos) => pos,
         None => {
@@ -153,7 +153,7 @@ ring_func!(bolt_verify_csrf, |p| {
     let provided_sig = &token[last_dot + 1..];
     let payload = &token[..last_dot];
 
-    if provided_sig.len() != 16 {
+    if provided_sig.len() != 64 {
         ring_ret_number!(p, 0.0);
         return;
     }
@@ -203,7 +203,7 @@ ring_func!(bolt_verify_csrf, |p| {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
     mac.update(payload.as_bytes());
     let sig = hex::encode(mac.finalize().into_bytes());
-    let expected_sig = &sig[..16];
+    let expected_sig = &sig;
 
     if provided_sig.len() != expected_sig.len() {
         ring_ret_number!(p, 0.0);

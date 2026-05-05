@@ -76,6 +76,7 @@ ring_libinit! {
     "bolt_session_get" => bolt_session_get,
     "bolt_session_delete" => bolt_session_delete,
     "bolt_session_clear" => bolt_session_clear,
+    "bolt_session_regenerate" => bolt_session_regenerate,
 
     // Compression
     "bolt_compression" => bolt_compression,
