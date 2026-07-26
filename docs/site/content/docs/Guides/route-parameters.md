@@ -27,6 +27,28 @@ summary: "URL parameters, route constraints, and query string handling"
 # Example: /posts/1/comments/5 → {"postId": "1", "commentId": "5"}
 ```
 
+### Wildcard / Catch-All Routes
+
+A `*` segment matches the rest of the URL path (including `/`), enabling
+catch-all routes such as SPA fallbacks, proxies, or custom 404 handlers.
+
+```ring
+# Named wildcard — capture the matched tail
+@get("/files/*path", func {
+    # /files/a/b/c.txt → path = "a/b/c.txt"
+    $bolt.json([:path = $bolt.param("path")])
+})
+
+# Anonymous wildcard — match anything, no param captured
+@get("/*", func {
+    $bolt.html(renderTemplate("index.html"))
+})
+```
+
+A wildcard must be the **last** segment. Named wildcards (`*path`) are
+accessible via `$bolt.param("path")`; anonymous wildcards (`*`) are not
+exposed as a parameter.
+
 ### Route Constraints
 
 Validate parameters with regex:

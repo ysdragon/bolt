@@ -12,6 +12,20 @@ Add regex constraint to route parameter.
 where("id", "[0-9]+")  # id must be numeric
 ```
 
+### Wildcard / Catch-All Segments
+
+A `*` segment in a route pattern matches the remainder of the URL path:
+
+```ring
+# Named — capture via $bolt.param
+@get("/files/*path", func { ... })      # /{path:.*}
+
+# Anonymous — match only, no param
+@get("/*", func { ... })                # /{_:.*}
+```
+
+Wildcards must be the last path segment.
+
 ### whereAll(aConstraints)
 Add multiple constraints at once.
 
