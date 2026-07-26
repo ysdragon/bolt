@@ -568,13 +568,18 @@ pub fn check_route_constraints(
     None
 }
 
-/// Convert Express-style path params (:param) to Actix-style ({param})
+/// Convert Express-style path params (:param) to Actix-style ({param}).
+///
+/// Also converts wildcard segments:
+///   - `*name` → `{name:.*}`  (catch-all, accessible via $bolt.param("name"))
+///   - `*`    → `{_:.*}`      (anonymous catch-all, not exposed as a named param)
 pub fn convert_path_params(path: &str) -> String {
     let mut result = String::new();
     let mut chars = path.chars().peekable();
 
     while let Some(c) = chars.next() {
         if c == ':' {
+            // :param -> {param}
             result.push('{');
             while let Some(&next) = chars.peek() {
                 if next.is_alphanumeric() || next == '_' {
@@ -584,6 +589,23 @@ pub fn convert_path_params(path: &str) -> String {
                 }
             }
             result.push('}');
+        } else if c == '*' {
+            // *name -> {name:.*}, or bare * -> {_:.*}
+            let mut name = String::new();
+            while let Some(&next) = chars.peek() {
+                if next.is_alphanumeric() || next == '_' {
+                    name.push(chars.next().unwrap());
+                } else {
+                    break;
+                }
+            }
+            if name.is_empty() {
+                result.push_str("{_:.*}");
+            } else {
+                result.push('{');
+                result.push_str(&name);
+                result.push_str(":.*}");
+            }
         } else {
             result.push(c);
         }
@@ -3431,6 +3453,53 @@ mod tests {
     fn test_convert_path_params_colon_with_digits() {
         assert_eq!(convert_path_params("/v:123"), "/v{123}");
         assert_eq!(convert_path_params("/path:value"), "/path{value}");
+    }
+
+    #[test]
+    fn test_convert_path_params_named_wildcard() {
+        assert_eq!(convert_path_params("/*path"), "/{path:.*}");
+        assert_eq!(convert_path_params("/files/*path"), "/files/{path:.*}");
+        assert_eq!(
+            convert_path_params("/api/v1/*rest"),
+            "/api/v1/{rest:.*}"
+        );
+    }
+
+    #[test]
+    fn test_convert_path_params_anonymous_wildcard() {
+        assert_eq!(convert_path_params("/*"), "/{_:.*}");
+        assert_eq!(convert_path_params("/files/*"), "/files/{_:.*}");
+    }
+
+    #[test]
+    fn test_convert_path_params_wildcard_with_underscore() {
+        assert_eq!(convert_path_params("/*file_path"), "/{file_path:.*}");
+    }
+
+    #[test]
+    fn test_convert_path_params_wildcard_preserves_trailing_slash_form() {
+        // wildcard as the entire path
+        assert_eq!(convert_path_params("*all"), "{all:.*}");
+    }
+
+    #[test]
+    fn test_convert_path_params_mixed_param_and_wildcard() {
+        assert_eq!(
+            convert_path_params("/users/:id/files/*path"),
+            "/users/{id}/files/{path:.*}"
+        );
+        assert_eq!(
+            convert_path_params("/api/:version/*rest"),
+            "/api/{version}/{rest:.*}"
+        );
+    }
+
+    #[test]
+    fn test_convert_path_params_mixed_param_and_anonymous_wildcard() {
+        assert_eq!(
+            convert_path_params("/users/:id/*"),
+            "/users/{id}/{_:.*}"
+        );
     }
 
     #[test]
