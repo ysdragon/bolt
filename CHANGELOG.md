@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial server framework with routing, middleware, WebSocket, SSE, caching, sessions, CSRF protection, and OpenAPI spec generation.
 - Default homepage route that renders a styled HTML page displaying Bolt name, version, description, and all registered routes. Skipped if `/` is already defined.
 - Support for custom HTTP methods in route registration.
+- Wildcard / catch-all route segments: `*name` (named, accessible via `$bolt.param`) and `*` (anonymous) as the last path segment, mapped to actix `{name:.*}` / `{_:.*}`.
 - `index.html` resolution for static file routes.
 - Platform-specific guidance for port-in-use errors.
 - Template fuel limits via minijinja fuel feature (100k instruction cap on template rendering).
