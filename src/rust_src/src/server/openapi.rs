@@ -8,9 +8,12 @@ use ring_lang_rs::*;
 
 use crate::HTTP_SERVER_TYPE;
 
-use super::{HttpServer, RouteDefinition, convert_path_params};
+use super::{HttpServer, RouteDefinition};
 
-/// Extract path parameter names from an OpenAPI-style path like "/users/{id}/posts/{pid}"
+/// Extract path parameter names from an OpenAPI-style path like "/users/{id}/posts/{pid}".
+///
+/// Strips any inline regex suffix (e.g. `{path:.*}` → `path`) and skips the
+/// anonymous wildcard placeholder `{_:.*}` so it is not documented as a param.
 fn extract_path_params(path: &str) -> Vec<String> {
     let mut params = Vec::new();
     let mut chars = path.chars().peekable();
@@ -23,9 +26,20 @@ fn extract_path_params(path: &str) -> Vec<String> {
                     chars.next(); // consume }
                     break;
                 }
+                if next == ':' {
+                    // inline regex suffix — discard the rest of this segment
+                    while let Some(&rest) = chars.peek() {
+                        if rest == '}' {
+                            chars.next(); // consume }
+                            break;
+                        }
+                        chars.next();
+                    }
+                    break;
+                }
                 name.push(chars.next().unwrap());
             }
-            if !name.is_empty() {
+            if !name.is_empty() && name != "_" {
                 params.push(name);
             }
         }
@@ -252,7 +266,7 @@ pub(crate) fn generate_openapi_spec(
     let mut paths_builder = PathsBuilder::new();
 
     for route in routes {
-        let path_key = convert_path_params(&route.path);
+        let path_key = route.path.clone();
 
         let mut op_builder = OperationBuilder::new()
             .summary(Some(format!("{} {}", route.method, route.path)))
@@ -483,5 +497,80 @@ mod tests {
         assert!(spec.contains("\"name\":\"pid\""));
         assert!(spec.contains("\"in\":\"path\""));
         assert!(spec.contains("\"required\":true"));
+    }
+
+    #[test]
+    fn test_extract_path_params_strips_regex_suffix() {
+        assert_eq!(extract_path_params("/files/{path:.*}"), vec!["path"]);
+        assert_eq!(
+            extract_path_params("/users/{id}/posts/{pid}"),
+            vec!["id", "pid"]
+        );
+    }
+
+    #[test]
+    fn test_extract_path_params_skips_anonymous_wildcard() {
+        assert_eq!(extract_path_params("/{_:.*}"), Vec::<String>::new());
+        assert_eq!(
+            extract_path_params("/api/{_:.*}"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_extract_path_params_named_wildcard() {
+        // After convert_path_params, /*all becomes /{all:.*}
+        assert_eq!(extract_path_params("/{all:.*}"), vec!["all"]);
+    }
+
+    #[test]
+    fn test_extract_path_params_mixed_regular_and_wildcard() {
+        assert_eq!(
+            extract_path_params("/users/{id}/files/{path:.*}"),
+            vec!["id", "path"]
+        );
+        assert_eq!(
+            extract_path_params("/api/{version}/{rest:.*}"),
+            vec!["version", "rest"]
+        );
+    }
+
+    #[test]
+    fn test_openapi_spec_with_anonymous_wildcard_route() {
+        let routes = [RouteDefinition {
+            method: "GET".into(),
+            path: "/{_:.*}".into(),
+            handler_name: "spa_fallback".into(),
+            description: None,
+            tags: vec![],
+            constraints: vec![],
+            rate_limit: None,
+            before_middleware: vec![],
+            after_middleware: vec![],
+        }];
+
+        let spec = generate_openapi_spec(&routes, "API", "1.0", "");
+        assert!(spec.contains("\"/{_:.*}\""));
+        // anonymous wildcard must NOT be documented as a parameter
+        assert!(!spec.contains("\"name\":\"_\""));
+    }
+
+    #[test]
+    fn test_openapi_spec_with_wildcard_route() {
+        let routes = [RouteDefinition {
+            method: "GET".into(),
+            path: "/files/{path:.*}".into(),
+            handler_name: "serve_file".into(),
+            description: None,
+            tags: vec![],
+            constraints: vec![],
+            rate_limit: None,
+            before_middleware: vec![],
+            after_middleware: vec![],
+        }];
+
+        let spec = generate_openapi_spec(&routes, "API", "1.0", "");
+        assert!(spec.contains("\"/files/{path:.*}\""));
+        assert!(spec.contains("\"name\":\"path\""));
     }
 }
