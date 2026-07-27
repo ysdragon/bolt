@@ -956,6 +956,39 @@ class Bolt {
         return bolt_json_pretty(aList)
     }
 
+    /// @brief Creates a JSON true boolean value.
+    /// @return JSON true sentinel (encodes as `true` in JSON).
+    func jsonTrue() {
+        return bolt_json_true()
+    }
+
+    /// @brief Creates a JSON false boolean value.
+    /// @return JSON false sentinel (encodes as `false` in JSON).
+    func jsonFalse() {
+        return bolt_json_false()
+    }
+
+    /// @brief Checks if a value is JSON true.
+    /// @param xValue Value to check (typically from jsonDecode).
+    /// @return 1 if true, 0 otherwise.
+    func jsonIsTrue(xValue) {
+        return bolt_json_is_true(xValue)
+    }
+
+    /// @brief Checks if a value is JSON false.
+    /// @param xValue Value to check (typically from jsonDecode).
+    /// @return 1 if false, 0 otherwise.
+    func jsonIsFalse(xValue) {
+        return bolt_json_is_false(xValue)
+    }
+
+    /// @brief Converts a JSON boolean value to a Ring number (1 or 0).
+    /// @param xValue JSON boolean value (from jsonTrue/jsonFalse/jsonDecode).
+    /// @return 1 for true, 0 for false. Errors if not a boolean.
+    func jsonToBool(xValue) {
+        return bolt_json_tobool(xValue)
+    }
+
     /// @brief URL-encodes a string.
     /// @param cStr String to encode.
     /// @return Encoded string.
