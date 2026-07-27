@@ -60,4 +60,6 @@ jobs:
 
     - name: Run tests
       working-directory: src/rust_src
+      env:
+        LD_LIBRARY_PATH: ${{ env.RING }}/lib
       run: cargo test
