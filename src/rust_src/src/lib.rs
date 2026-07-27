@@ -231,6 +231,11 @@ ring_libinit! {
     "bolt_json_encode" => bolt_json_encode,
     "bolt_json_decode" => bolt_json_decode,
     "bolt_json_pretty" => bolt_json_pretty,
+    "bolt_json_true" => bolt_json_true,
+    "bolt_json_false" => bolt_json_false,
+    "bolt_json_is_true" => bolt_json_is_true,
+    "bolt_json_is_false" => bolt_json_is_false,
+    "bolt_json_tobool" => bolt_json_tobool,
 
     // Environment (.env)
     "bolt_env_load" => bolt_env_load,

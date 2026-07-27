@@ -7,6 +7,14 @@
 use ring_lang_rs::*;
 use serde_json::{Map, Value};
 
+// Convert Ring list to serde_json Value
+const MAX_JSON_DEPTH: usize = 128;
+
+/// Sentinel string representing JSON `true` in Ring lists.
+pub const JSON_TRUE: &str = "__JSON_TRUE__";
+/// Sentinel string representing JSON `false` in Ring lists.
+pub const JSON_FALSE: &str = "__JSON_FALSE__";
+
 /// bolt_json_encode(ring_list) → json_string
 /// Converts a Ring list to JSON string
 ring_func!(bolt_json_encode, |p| {
@@ -73,8 +81,56 @@ ring_func!(bolt_json_pretty, |p| {
     }
 });
 
-// Convert Ring list to serde_json Value
-const MAX_JSON_DEPTH: usize = 128;
+/// bolt_json_true() → JSON true sentinel string
+ring_func!(bolt_json_true, |p| {
+    ring_check_paracount!(p, 0);
+    ring_ret_string!(p, JSON_TRUE);
+});
+
+/// bolt_json_false() → JSON false sentinel string
+ring_func!(bolt_json_false, |p| {
+    ring_check_paracount!(p, 0);
+    ring_ret_string!(p, JSON_FALSE);
+});
+
+/// bolt_json_is_true(value) → 1.0 if value is JSON true, else 0.0
+ring_func!(bolt_json_is_true, |p| {
+    ring_check_paracount!(p, 1);
+    if ring_api_isstring(p, 1) {
+        let s = ring_get_string!(p, 1);
+        ring_ret_number!(p, if s == JSON_TRUE { 1.0 } else { 0.0 });
+    } else {
+        ring_ret_number!(p, 0.0);
+    }
+});
+
+/// bolt_json_is_false(value) → 1.0 if value is JSON false, else 0.0
+ring_func!(bolt_json_is_false, |p| {
+    ring_check_paracount!(p, 1);
+    if ring_api_isstring(p, 1) {
+        let s = ring_get_string!(p, 1);
+        ring_ret_number!(p, if s == JSON_FALSE { 1.0 } else { 0.0 });
+    } else {
+        ring_ret_number!(p, 0.0);
+    }
+});
+
+/// bolt_json_tobool(value) → 1.0 for true, 0.0 for false, error otherwise
+ring_func!(bolt_json_tobool, |p| {
+    ring_check_paracount!(p, 1);
+    if ring_api_isstring(p, 1) {
+        let s = ring_get_string!(p, 1);
+        if s == JSON_TRUE {
+            ring_ret_number!(p, 1.0);
+            return;
+        }
+        if s == JSON_FALSE {
+            ring_ret_number!(p, 0.0);
+            return;
+        }
+    }
+    ring_error!(p, "Not a JSON boolean value.");
+});
 
 pub fn ring_list_to_json(list: RingList) -> Result<Value, String> {
     ring_list_to_json_inner(list, 0)
@@ -146,6 +202,12 @@ fn ring_list_to_json_inner(list: RingList, depth: usize) -> Result<Value, String
 fn get_list_item_as_json(list: RingList, index: u32, depth: usize) -> Result<Value, String> {
     if ring_list_isstring(list, index) {
         let s = ring_list_getstring_str(list, index);
+        if s == JSON_TRUE {
+            return Ok(Value::Bool(true));
+        }
+        if s == JSON_FALSE {
+            return Ok(Value::Bool(false));
+        }
         Ok(Value::String(s))
     } else if ring_list_isnumber(list, index) {
         let n = ring_list_getdouble(list, index);
@@ -198,7 +260,7 @@ fn add_json_value_to_list(list: RingList, value: &Value, depth: usize) -> Result
             ring_list_addstring_str(list, "");
         }
         Value::Bool(b) => {
-            ring_list_adddouble(list, if *b { 1.0 } else { 0.0 });
+            ring_list_addstring_str(list, if *b { JSON_TRUE } else { JSON_FALSE });
         }
         Value::Number(n) => {
             ring_list_adddouble(list, n.as_f64().unwrap_or(0.0));
@@ -222,4 +284,96 @@ fn add_json_value_to_list(list: RingList, value: &Value, depth: usize) -> Result
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn encode(list: RingList) -> String {
+        serde_json::to_string(&ring_list_to_json(list).unwrap()).unwrap()
+    }
+
+    fn decode(json: &str) -> RingList {
+        let value: Value = serde_json::from_str(json).unwrap();
+        let list = ring_list_new(0);
+        json_to_ring_list(list, &value, 0).unwrap();
+        list
+    }
+
+    #[test]
+    fn test_encode_boolean_true() {
+        let list = ring_list_new(0);
+        let pair = ring_list_newlist(list);
+        ring_list_addstring_str(pair, "active");
+        ring_list_addstring_str(pair, JSON_TRUE);
+        assert_eq!(encode(list), r#"{"active":true}"#);
+    }
+
+    #[test]
+    fn test_encode_boolean_false() {
+        let list = ring_list_new(0);
+        let pair = ring_list_newlist(list);
+        ring_list_addstring_str(pair, "disabled");
+        ring_list_addstring_str(pair, JSON_FALSE);
+        assert_eq!(encode(list), r#"{"disabled":false}"#);
+    }
+
+    #[test]
+    fn test_encode_boolean_in_array() {
+        let list = ring_list_new(0);
+        ring_list_addstring_str(list, JSON_TRUE);
+        ring_list_addstring_str(list, JSON_FALSE);
+        assert_eq!(encode(list), r#"[true,false]"#);
+    }
+
+    #[test]
+    fn test_decode_boolean_true() {
+        let list = decode(r#"{"active":true}"#);
+        let inner = ring_list_getlist(list, 1);
+        assert!(ring_list_isstring(inner, 2));
+        assert_eq!(ring_list_getstring_str(inner, 2), JSON_TRUE);
+    }
+
+    #[test]
+    fn test_decode_boolean_false() {
+        let list = decode(r#"{"disabled":false}"#);
+        let inner = ring_list_getlist(list, 1);
+        assert_eq!(ring_list_getstring_str(inner, 2), JSON_FALSE);
+    }
+
+    #[test]
+    fn test_decode_boolean_in_array() {
+        let list = decode(r#"[true,false]"#);
+        assert_eq!(ring_list_getstring_str(list, 1), JSON_TRUE);
+        assert_eq!(ring_list_getstring_str(list, 2), JSON_FALSE);
+    }
+
+    #[test]
+    fn test_round_trip_boolean() {
+        let original = r#"{"active":true,"disabled":false,"count":1}"#;
+        let list = decode(original);
+        let restored = encode(list);
+        // Compare as parsed JSON values (key order may differ due to serde_json's
+        // BTreeMap, but booleans and numbers are preserved).
+        let a: Value = serde_json::from_str(original).unwrap();
+        let b: Value = serde_json::from_str(&restored).unwrap();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_encode_number_not_boolean() {
+        let list = ring_list_new(0);
+        let pair = ring_list_newlist(list);
+        ring_list_addstring_str(pair, "count");
+        ring_list_adddouble(pair, 1.0);
+        assert_eq!(encode(list), r#"{"count":1}"#);
+    }
+
+    #[test]
+    fn test_sentinel_string_escaped_as_literal() {
+        let list = ring_list_new(0);
+        ring_list_addstring_str(list, JSON_TRUE);
+        assert_eq!(encode(list), "[true]");
+    }
 }
