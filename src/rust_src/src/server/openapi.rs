@@ -511,10 +511,7 @@ mod tests {
     #[test]
     fn test_extract_path_params_skips_anonymous_wildcard() {
         assert_eq!(extract_path_params("/{_:.*}"), Vec::<String>::new());
-        assert_eq!(
-            extract_path_params("/api/{_:.*}"),
-            Vec::<String>::new()
-        );
+        assert_eq!(extract_path_params("/api/{_:.*}"), Vec::<String>::new());
     }
 
     #[test]

@@ -3459,10 +3459,7 @@ mod tests {
     fn test_convert_path_params_named_wildcard() {
         assert_eq!(convert_path_params("/*path"), "/{path:.*}");
         assert_eq!(convert_path_params("/files/*path"), "/files/{path:.*}");
-        assert_eq!(
-            convert_path_params("/api/v1/*rest"),
-            "/api/v1/{rest:.*}"
-        );
+        assert_eq!(convert_path_params("/api/v1/*rest"), "/api/v1/{rest:.*}");
     }
 
     #[test]
@@ -3496,10 +3493,7 @@ mod tests {
 
     #[test]
     fn test_convert_path_params_mixed_param_and_anonymous_wildcard() {
-        assert_eq!(
-            convert_path_params("/users/:id/*"),
-            "/users/{id}/{_:.*}"
-        );
+        assert_eq!(convert_path_params("/users/:id/*"), "/users/{id}/{_:.*}");
     }
 
     #[test]
