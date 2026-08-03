@@ -614,6 +614,304 @@ pub fn convert_path_params(path: &str) -> String {
     result
 }
 
+/// True when the path is a catch-all whose first segment is a wildcard
+/// (e.g. `/{_:.*}` or `/{name:.*}`). Such routes can match framework
+/// endpoints like `/docs` and `/openapi.json`, so they are registered
+/// after those endpoints to prevent shadowing them.
+fn is_catch_all_path(path: &str) -> bool {
+    path.trim_start_matches('/')
+        .split('/')
+        .next()
+        .map_or(false, |seg| seg.starts_with('{') && seg.ends_with(":.*}"))
+}
+
+/// Register a single HTTP route on the app for the given method.
+fn register_http_route<T>(
+    mut app: actix_web::App<T>,
+    method: &str,
+    path: &str,
+    handler_name: String,
+) -> actix_web::App<T>
+where
+    T: actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+{
+    match method {
+        "GET" => {
+            app = app.route(
+                path,
+                web::get().to(move |req, state, payload| {
+                    handle_request(req, state, payload, handler_name.clone())
+                }),
+            );
+        }
+        "POST" => {
+            app = app.route(
+                path,
+                web::post().to(move |req, state, payload| {
+                    handle_request(req, state, payload, handler_name.clone())
+                }),
+            );
+        }
+        "PUT" => {
+            app = app.route(
+                path,
+                web::put().to(move |req, state, payload| {
+                    handle_request(req, state, payload, handler_name.clone())
+                }),
+            );
+        }
+        "DELETE" => {
+            app = app.route(
+                path,
+                web::delete().to(move |req, state, payload| {
+                    handle_request(req, state, payload, handler_name.clone())
+                }),
+            );
+        }
+        "PATCH" => {
+            app = app.route(
+                path,
+                web::patch().to(move |req, state, payload| {
+                    handle_request(req, state, payload, handler_name.clone())
+                }),
+            );
+        }
+        "OPTIONS" => {
+            app = app.route(
+                path,
+                web::route().method(actix_web::http::Method::OPTIONS).to(
+                    move |req, state, payload| {
+                        handle_request(req, state, payload, handler_name.clone())
+                    },
+                ),
+            );
+        }
+        "HEAD" => {
+            app = app.route(
+                path,
+                web::route().method(actix_web::http::Method::HEAD).to(
+                    move |req, state, payload| {
+                        handle_request(req, state, payload, handler_name.clone())
+                    },
+                ),
+            );
+        }
+        _ => {
+            let custom_method = method.to_string();
+            match actix_web::http::Method::from_bytes(custom_method.as_bytes()) {
+                Ok(method) => {
+                    app = app.route(
+                        path,
+                        web::route().method(method).to(move |req, state, payload| {
+                            handle_request(req, state, payload, handler_name.clone())
+                        }),
+                    );
+                }
+                Err(_) => {
+                    eprintln!(
+                        "[bolt] Warning: invalid HTTP method '{}' for route {}",
+                        custom_method, path
+                    );
+                }
+            }
+        }
+    }
+    app
+}
+
+/// Register a WebSocket route on the app.
+fn register_ws_route<T>(
+    app: actix_web::App<T>,
+    path: &str,
+    ws_route: &WsRouteDefinition,
+) -> actix_web::App<T>
+where
+    T: actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+{
+    let on_connect = ws_route.on_connect.clone();
+    let on_message = ws_route.on_message.clone();
+    let on_disconnect = ws_route.on_disconnect.clone();
+    let ws_path = ws_route.path.clone();
+
+    app.route(
+        path,
+        web::get().to(
+            move |req, stream: web::Payload, state: web::Data<AppState>| {
+                self::websocket::handle_websocket(
+                    req,
+                    stream,
+                    state,
+                    on_connect.clone(),
+                    on_message.clone(),
+                    on_disconnect.clone(),
+                    ws_path.clone(),
+                )
+            },
+        ),
+    )
+}
+
+/// Register an SSE route on the app.
+fn register_sse_route<T>(app: actix_web::App<T>, path: &str) -> actix_web::App<T>
+where
+    T: actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+{
+    app.route(path, web::get().to(self::sse::handle_sse))
+}
+
+/// Register all user routes plus framework endpoints on the app.
+///
+/// Registration order matters: actix matches routes in registration order,
+/// so catch-all routes (`/*`, `/*name`) are registered last to prevent them
+/// from shadowing framework endpoints (OpenAPI spec, docs UI) and static
+/// file mounts.
+fn build_route_app<T>(
+    mut app: actix_web::App<T>,
+    routes: &[RouteDefinition],
+    ws_routes: &[WsRouteDefinition],
+    sse_routes: &[SseRouteDefinition],
+    static_routes: &[StaticRoute],
+    openapi_spec: &Option<String>,
+) -> actix_web::App<T>
+where
+    T: actix_web::dev::ServiceFactory<
+            actix_web::dev::ServiceRequest,
+            Config = (),
+            Error = actix_web::Error,
+            InitError = (),
+        >,
+{
+    let mut catch_all_routes: Vec<&RouteDefinition> = Vec::new();
+    let mut normal_routes: Vec<&RouteDefinition> = Vec::new();
+    for route in routes {
+        if is_catch_all_path(&route.path) {
+            catch_all_routes.push(route);
+        } else {
+            normal_routes.push(route);
+        }
+    }
+
+    for route in normal_routes {
+        let method = route.method.clone();
+        let path = route.path.clone();
+        let handler_name = route.handler_name.clone();
+        app = register_http_route(app, &method, &path, handler_name);
+    }
+
+    let mut catch_all_ws: Vec<&WsRouteDefinition> = Vec::new();
+    for ws_route in ws_routes {
+        let path = convert_path_params(&ws_route.path);
+        if is_catch_all_path(&path) {
+            catch_all_ws.push(ws_route);
+            continue;
+        }
+        app = register_ws_route(app, &path, ws_route);
+    }
+
+    let mut catch_all_sse: Vec<&SseRouteDefinition> = Vec::new();
+    for sse_route in sse_routes {
+        let path = convert_path_params(&sse_route.path);
+        if is_catch_all_path(&path) {
+            catch_all_sse.push(sse_route);
+            continue;
+        }
+        app = register_sse_route(app, &path);
+    }
+
+    for static_route in static_routes {
+        let url_path = static_route.url_path.trim_end_matches('/');
+        let url_path = if url_path.is_empty() { "/" } else { url_path };
+        let dir_path = static_route.dir_path.clone();
+        let canonical_root = std::path::Path::new(&dir_path).canonicalize().ok();
+        app = app.service(
+            Files::new(url_path, &static_route.dir_path)
+                .index_file("index.html")
+                .path_filter(move |path, _| {
+                    let full_path = std::path::Path::new(&dir_path).join(path);
+                    let resolved = match full_path.canonicalize() {
+                        Ok(p) => p,
+                        Err(_) => return false,
+                    };
+                    if let Some(ref root) = canonical_root {
+                        resolved.starts_with(root)
+                    } else {
+                        false
+                    }
+                }),
+        );
+    }
+
+    if let Some(spec) = openapi_spec {
+        let spec_for_json = spec.clone();
+        app = app.route(
+            "/openapi.json",
+            web::get().to(move |req: HttpRequest, state: web::Data<AppState>| {
+                let s = spec_for_json.clone();
+                async move {
+                    if let Some(resp) = check_openapi_ip(&req, &state) {
+                        return resp;
+                    }
+                    HttpResponse::Ok().content_type("application/json").body(s)
+                }
+            }),
+        );
+
+        let spec_parsed: utoipa::openapi::OpenApi = serde_json::from_str(spec).unwrap_or_default();
+        app = app.route(
+            "/docs",
+            web::get().to(
+                move |req: HttpRequest, state: web::Data<AppState>| async move {
+                    if let Some(resp) = check_openapi_ip(&req, &state) {
+                        return resp;
+                    }
+                    HttpResponse::Found()
+                        .insert_header(("location", "/docs/"))
+                        .finish()
+                },
+            ),
+        );
+        app = app.service(
+            utoipa_swagger_ui::SwaggerUi::new("/docs/{_:.*}").url("/openapi.json", spec_parsed),
+        );
+    }
+
+    // Catch-all routes are registered last so they do not shadow
+    // framework endpoints (OpenAPI spec, docs UI) registered above.
+    for route in catch_all_routes {
+        let method = route.method.clone();
+        let path = route.path.clone();
+        let handler_name = route.handler_name.clone();
+        app = register_http_route(app, &method, &path, handler_name);
+    }
+
+    for ws_route in catch_all_ws {
+        let path = convert_path_params(&ws_route.path);
+        app = register_ws_route(app, &path, ws_route);
+    }
+
+    for sse_route in catch_all_sse {
+        let path = convert_path_params(&sse_route.path);
+        app = register_sse_route(app, &path);
+    }
+
+    app
+}
+
 fn check_openapi_ip(req: &HttpRequest, state: &AppState) -> Option<HttpResponse> {
     let headers: HashMap<String, String> = req
         .headers()
@@ -1267,184 +1565,18 @@ async fn run_server(
     let state_data = web::Data::new(state.clone());
 
     let server = ActixHttpServer::new(move || {
-        let mut app = App::new()
+        let app = App::new()
             .app_data(state_data.clone())
             .app_data(web::PayloadConfig::new(100 * 1024 * 1024));
 
-        for route in &routes {
-            let path = route.path.clone();
-            let handler_name = route.handler_name.clone();
-
-            match route.method.as_str() {
-                "GET" => {
-                    app = app.route(
-                        &path,
-                        web::get().to(move |req, state, payload| {
-                            handle_request(req, state, payload, handler_name.clone())
-                        }),
-                    );
-                }
-                "POST" => {
-                    app = app.route(
-                        &path,
-                        web::post().to(move |req, state, payload| {
-                            handle_request(req, state, payload, handler_name.clone())
-                        }),
-                    );
-                }
-                "PUT" => {
-                    app = app.route(
-                        &path,
-                        web::put().to(move |req, state, payload| {
-                            handle_request(req, state, payload, handler_name.clone())
-                        }),
-                    );
-                }
-                "DELETE" => {
-                    app = app.route(
-                        &path,
-                        web::delete().to(move |req, state, payload| {
-                            handle_request(req, state, payload, handler_name.clone())
-                        }),
-                    );
-                }
-                "PATCH" => {
-                    app = app.route(
-                        &path,
-                        web::patch().to(move |req, state, payload| {
-                            handle_request(req, state, payload, handler_name.clone())
-                        }),
-                    );
-                }
-                "OPTIONS" => {
-                    app = app.route(
-                        &path,
-                        web::route().method(actix_web::http::Method::OPTIONS).to(
-                            move |req, state, payload| {
-                                handle_request(req, state, payload, handler_name.clone())
-                            },
-                        ),
-                    );
-                }
-                "HEAD" => {
-                    app = app.route(
-                        &path,
-                        web::route().method(actix_web::http::Method::HEAD).to(
-                            move |req, state, payload| {
-                                handle_request(req, state, payload, handler_name.clone())
-                            },
-                        ),
-                    );
-                }
-                _ => {
-                    let custom_method = route.method.clone();
-                    match actix_web::http::Method::from_bytes(custom_method.as_bytes()) {
-                        Ok(method) => {
-                            app = app.route(
-                                &path,
-                                web::route().method(method).to(move |req, state, payload| {
-                                    handle_request(req, state, payload, handler_name.clone())
-                                }),
-                            );
-                        }
-                        Err(_) => {
-                            eprintln!(
-                                "[bolt] Warning: invalid HTTP method '{}' for route {}",
-                                custom_method, path
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        for ws_route in &ws_routes {
-            let path = convert_path_params(&ws_route.path);
-            let on_connect = ws_route.on_connect.clone();
-            let on_message = ws_route.on_message.clone();
-            let on_disconnect = ws_route.on_disconnect.clone();
-            let ws_path = ws_route.path.clone();
-
-            app = app.route(
-                &path,
-                web::get().to(
-                    move |req, stream: web::Payload, state: web::Data<AppState>| {
-                        self::websocket::handle_websocket(
-                            req,
-                            stream,
-                            state,
-                            on_connect.clone(),
-                            on_message.clone(),
-                            on_disconnect.clone(),
-                            ws_path.clone(),
-                        )
-                    },
-                ),
-            );
-        }
-
-        for sse_route in &sse_routes {
-            let path = convert_path_params(&sse_route.path);
-            app = app.route(&path, web::get().to(self::sse::handle_sse));
-        }
-
-        for static_route in &static_routes {
-            let url_path = static_route.url_path.trim_end_matches('/');
-            let url_path = if url_path.is_empty() { "/" } else { url_path };
-            let dir_path = static_route.dir_path.clone();
-            let canonical_root = std::path::Path::new(&dir_path).canonicalize().ok();
-            app = app.service(
-                Files::new(url_path, &static_route.dir_path)
-                    .index_file("index.html")
-                    .path_filter(move |path, _| {
-                        let full_path = std::path::Path::new(&dir_path).join(path);
-                        let resolved = match full_path.canonicalize() {
-                            Ok(p) => p,
-                            Err(_) => return false,
-                        };
-                        if let Some(ref root) = canonical_root {
-                            resolved.starts_with(root)
-                        } else {
-                            false
-                        }
-                    }),
-            );
-        }
-
-        if let Some(ref spec) = openapi_spec_clone {
-            let spec_for_json = spec.clone();
-            app = app.route(
-                "/openapi.json",
-                web::get().to(move |req: HttpRequest, state: web::Data<AppState>| {
-                    let s = spec_for_json.clone();
-                    async move {
-                        if let Some(resp) = check_openapi_ip(&req, &state) {
-                            return resp;
-                        }
-                        HttpResponse::Ok().content_type("application/json").body(s)
-                    }
-                }),
-            );
-
-            let spec_parsed: utoipa::openapi::OpenApi =
-                serde_json::from_str(spec).unwrap_or_default();
-            app = app.route(
-                "/docs",
-                web::get().to(
-                    move |req: HttpRequest, state: web::Data<AppState>| async move {
-                        if let Some(resp) = check_openapi_ip(&req, &state) {
-                            return resp;
-                        }
-                        HttpResponse::Found()
-                            .insert_header(("location", "/docs/"))
-                            .finish()
-                    },
-                ),
-            );
-            app = app.service(
-                utoipa_swagger_ui::SwaggerUi::new("/docs/{_:.*}").url("/openapi.json", spec_parsed),
-            );
-        }
+        let app = build_route_app(
+            app,
+            &routes,
+            &ws_routes,
+            &sse_routes,
+            &static_routes,
+            &openapi_spec_clone,
+        );
 
         let cors = if cors_config.enabled {
             let has_wildcard = cors_config.origins.iter().any(|o| o == "*");
@@ -3492,6 +3624,37 @@ mod tests {
     }
 
     #[test]
+    fn test_is_catch_all_path_anonymous_wildcard() {
+        assert!(is_catch_all_path("/{_:.*}"));
+    }
+
+    #[test]
+    fn test_is_catch_all_path_named_wildcard() {
+        assert!(is_catch_all_path("/{path:.*}"));
+    }
+
+    #[test]
+    fn test_is_catch_all_path_wildcard_after_static_prefix() {
+        // `/files/*path` — first segment is static, cannot shadow /docs or /openapi.json
+        assert!(!is_catch_all_path("/files/{path:.*}"));
+    }
+
+    #[test]
+    fn test_is_catch_all_path_regular_first_param() {
+        // `/:id` or `/{id}/posts/{x:.*}` — first segment is a regular param
+        assert!(!is_catch_all_path("/{id}"));
+        assert!(!is_catch_all_path("/{id}/posts/{x:.*}"));
+    }
+
+    #[test]
+    fn test_is_catch_all_path_plain_paths() {
+        assert!(!is_catch_all_path("/"));
+        assert!(!is_catch_all_path("/users"));
+        assert!(!is_catch_all_path("/users/{id}"));
+        assert!(!is_catch_all_path(""));
+    }
+
+    #[test]
     fn test_convert_path_params_mixed_param_and_anonymous_wildcard() {
         assert_eq!(convert_path_params("/users/:id/*"), "/users/{id}/{_:.*}");
     }
@@ -4524,6 +4687,74 @@ mod tests {
         let body: serde_json::Value = aw_test::read_body_json(resp).await;
         assert_eq!(body["handler"], "test_handler");
         assert_eq!(body["path_params"]["id"], "123");
+    }
+
+    #[actix_web::test]
+    async fn test_catch_all_registered_after_framework_endpoints() {
+        // Catch-all listed FIRST to prove registration order, not input
+        // order, decides precedence.
+        let routes = vec![
+            RouteDefinition {
+                method: "GET".into(),
+                path: "/{_:.*}".into(),
+                handler_name: "spa_fallback".into(),
+                description: None,
+                tags: vec![],
+                constraints: vec![],
+                rate_limit: None,
+                before_middleware: vec![],
+                after_middleware: vec![],
+            },
+            RouteDefinition {
+                method: "GET".into(),
+                path: "/files/{path:.*}".into(),
+                handler_name: "serve_file".into(),
+                description: None,
+                tags: vec![],
+                constraints: vec![],
+                rate_limit: None,
+                before_middleware: vec![],
+                after_middleware: vec![],
+            },
+        ];
+        let spec = r#"{"openapi":"3.1.0","info":{"title":"Bolt API","version":"1.0.0"}}"#;
+
+        let state_data = web::Data::new(build_test_app_state(routes.clone()));
+        let app = aw_test::init_service(build_route_app(
+            App::new().app_data(state_data),
+            &routes,
+            &[],
+            &[],
+            &[],
+            &Some(spec.to_string()),
+        ))
+        .await;
+
+        // Framework endpoints win over the catch-all.
+        let req = aw_test::TestRequest::get().uri("/docs").to_request();
+        let resp = aw_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 302);
+
+        let req = aw_test::TestRequest::get()
+            .uri("/openapi.json")
+            .to_request();
+        let resp = aw_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = aw_test::read_body_json(resp).await;
+        assert_eq!(body["info"]["title"], "Bolt API");
+
+        // The catch-all still handles non-framework paths. It dispatches to
+        // the VM, which is absent in tests, so the handler yields 503 —
+        // proving the catch-all matched rather than a framework endpoint.
+        let req = aw_test::TestRequest::get()
+            .uri("/anything/else")
+            .to_request();
+        let resp = aw_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 503);
+
+        let req = aw_test::TestRequest::get().uri("/files/a/b").to_request();
+        let resp = aw_test::call_service(&app, req).await;
+        assert_eq!(resp.status(), 503);
     }
 
     #[actix_web::test]
