@@ -38,6 +38,9 @@ _MODULE_PORTS = {
     "test_limits": 8824,
     "test_panics": 8825,
     "test_error_paths": 8826,
+    "test_wildcard_routes": 8827,
+    "test_json_booleans": 8828,
+    "test_openapi_wildcards": 8829,
 }
 
 
