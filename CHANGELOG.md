@@ -141,6 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Tests
 
 - Comprehensive integration test suite with 25+ pytest modules, 27+ Ring server fixtures, TLS certificates, and per-module port allocation covering HTTP methods, routing, middleware, security, caching, WebSocket, SSE, uploads, and edge cases.
+- Integration tests for wildcard/catch-all routes (`test_wildcard_routes`): named and anonymous wildcard matching, param extraction, docs endpoints surviving catch-alls, and OpenAPI path-param emission for wildcard segments (`test_openapi_wildcards`).
+- Integration tests for JSON boolean sentinels (`test_json_booleans`): real boolean encoding, predicate helpers on both branches, and encode/decode round-trip.
 
 #### Documentation Site
 
@@ -215,6 +217,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 #### Security
 
 - NUL byte injection prevention: file paths validated in `fileSave`, `sendFile`, `sendFileAs`, and `renderFile` methods; returns error status when NUL bytes detected.
+
+#### Routing
+
+- Catch-all routes (`/*`, `/*name`) are now registered after framework endpoints and static file mounts, so they no longer shadow `/docs`, `/openapi.json`, or static files. Known limitation: plain leading params (e.g. `/:id`) still shadow docs endpoints. Covered by Rust unit tests and `test_wildcard_routes`.
 
 #### File Uploads
 
