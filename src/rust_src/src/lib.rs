@@ -289,6 +289,7 @@ ring_libinit! {
     "bolt_escape_html" => bolt_escape_html,
     "bolt_escape_attr" => bolt_escape_attr,
     "bolt_escape_js" => bolt_escape_js,
+    "bolt_escape_js_dq" => bolt_escape_js_dq,
     "bolt_escape_url" => bolt_escape_url,
 
 }
