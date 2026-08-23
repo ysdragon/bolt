@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ⚠️ Breaking Changes
+
+- **JWT default TTL**: `jwt_encode()` now applies a default 3600-second TTL when `expires_in` is omitted. Previously, omitting `expires_in` produced a token with no `exp` claim (never expires). Explicitly pass `expires_in` to control token lifetime. Explicit TTLs that are zero, negative, NaN, or infinite are now rejected with an error instead of saturating to 0 (immediate expiry).
+- **CSRF query-string removed**: `_csrf` is no longer accepted via the GET query string. Tokens must be sent via the `X-CSRF-Token` header or the `_csrf` form field. Query-string CSRF tokens leak via server logs, browser history, and referrer headers.
+- **AES ciphertext format change**: String keys (anything that is not a raw 32-byte key) are now stretched with Argon2id (m=19MiB, t=2, p=1) using a random 16-byte salt prepended to the output. Ciphertexts produced with string keys by older versions will not decrypt. Raw 32-byte keys continue to use the legacy `nonce || ciphertext` format. A 32-character password is treated as a raw key (no stretching) — use a longer or shorter password to ensure Argon2id key derivation applies.
+- **WebSocket origin validation**: Origin check now requires exact host or subdomain match instead of substring containment. `example.com` no longer matches `example.com.attacker.tld`. Previous substring check allowed bypass via domain suffix tricks.
+
 ### Added
 
 #### Server Core
@@ -22,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raw request URI exposed via `bolt_req_uri` and `uri` field on `RequestContext`, distinct from the matched route pattern.
 - WebSocket close frame with optional code and reason fields forwarded to actix-ws close frames.
 - Support for multiple TLS private key formats — tries PKCS#8, RSA (PKCS#1), and EC (SEC1) in sequence.
+- `bolt_escape_js_dq` for escaping JavaScript in double-quoted string contexts (complements `bolt_escape_js` for single-quoted contexts).
+- Default `ringvm_errorhandler` registered when no `@error()` handler is set, preventing Ring runtime errors from killing the server process. Unhandled errors return 500 Internal Server Error instead of crashing.
+- VM thread handle stored in `VM_THREAD` and joined on next `bolt_listen` to prevent two threads racing on the same non-thread-safe Ring VM.
+- `Done(None)` (handler error, VM alive) now returns 500 Internal Server Error; `ChannelDown` (VM thread gone) returns 503 Service Unavailable — previously both returned 503.
+- Request timeout via `tokio::time::timeout` around VM send+response_wait, returning 504 Gateway Timeout on deadline expiry.
 
 #### Security
 
@@ -73,6 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenAPI endpoint gated behind IP allowlist/blacklist.
 - `bolt_force_secure_cookies` for enforcing secure session cookies.
 - `bolt_ws_dropped_count` metric for WebSocket backpressure monitoring.
+- `valid_jwt_ttl` rejects zero, negative, NaN, and infinite TTL values.
+- `valid_env_pair` rejects `=` and NUL bytes in env keys and NUL bytes in env values before calling `std::env::set_var` (prevents panic under `panic=abort`).
+- Upload index validation rejects non-finite or sub-1.0 values before integer conversion (prevents saturation to index 0).
+- Per-route rate-limit window validation: `window_seconds` must be strictly positive (prevents division-by-zero in quota period calculation).
+- Request timeout rejection of non-positive or non-finite milliseconds in `bolt_set_timeout`.
+- Rate limit map hard cap at 200,000 IPs with fail-open behavior under distributed flood; warns once when cap is reached, re-arms after cleanup.
+- Log redaction regex hardened: multi-token quantifier replaced with single-token match to prevent log-line erasure; chained auth schemes (`Bearer token: ...`) handled correctly.
+- JSON boolean sentinel escaping: literal strings equal to `__JSON_TRUE__`/`__JSON_FALSE__` are backslash-prefixed on decode and unescaped on encode, so they round-trip as strings instead of being coerced to booleans.
+- Datetime format validation: invalid `strftime` patterns return 0 instead of panicking; timezone offset directives (`%z`, `%:z`, `%::z`, `%:::z`, `%#z`) detected via parsed items, with `%%` escapes honored; `datetime_parse` normalizes offset-aware inputs to UTC.
+- `add_days`/`add_hours` use `checked_add_signed` to prevent silent overflow on extreme inputs.
+- SSE `data` field splitting now handles bare `\r` (CR without LF) to prevent raw CR injection into the wire format.
+- WebSocket close frame forwarded with `code: None, reason: None` on `AggregatedMessage::Close` (previously silently dropped).
 
 #### WebSocket
 
@@ -190,6 +214,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Error handler and middleware target route names validated.
 - CORS config simplified: wildcard origin (`*`) treated as allow-any.
 - `wsRouteBefore`/`wsRouteAfter` removed in favor of unified `routeBefore`/`routeAfter` with `(handler_name, middleware)` tuples for WS routes.
+- IP allow/deny check moved before body buffering (cheap rejection of forbidden IPs).
+- Cookie priority: `__Host-BOLTSESSION` preferred over `BOLTSESSION`.
 
 #### Performance
 
@@ -198,48 +224,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-#### WebSocket
-
-- Race conditions in connection counting resolved — global and per-IP counters now increment before handshake and roll back on failure.
+- Ring runtime errors (e.g., `0 + "abc"` type errors) no longer kill the server process when no `@error()` handler is registered.
+- VM thread handle not joined on server restart (could race on the same non-thread-safe Ring VM).
+- WebSocket origin validation bypass via domain suffix tricks (`example.com.attacker.tld`).
+- Rate-limit division-by-zero when `window_seconds` was 0 (quota period calculation).
+- `std::env::set_var` panic on keys containing `=` or NUL bytes (fatal under `panic=abort`).
+- Upload index saturation to 0 on NaN/negative input (could return wrong file).
+- SSE raw CR injection via bare `\r` in data field.
+- JWT immediate-expiry tokens from NaN/negative `expires_in` saturating to 0 via float→u64 cast.
+- Datetime overflow on extreme `add_days`/`add_hours` inputs (silent wraparound to wrong timestamps).
+- Email validation regex now allows dots in local part but rejects consecutive dots (`..`).
+- JSON sentinel strings (`__JSON_TRUE__`/`__JSON_FALSE__`) now round-trip correctly through decode→encode instead of being coerced to booleans.
+- Race conditions in WebSocket connection counting — global and per-IP counters now increment before handshake and roll back on failure.
 - Per-client rate limiting now correctly uses the request handle instead of a global check.
 - IO protocol errors handled silently in the WebSocket message loop.
 - Rate limit interval integer division fixed (caused panic at rates >1000/sec); now uses microseconds with `.max(1)`.
-
-#### Crypto & Security
-
 - Deprecated `from_slice` calls updated to `from` in aes-gcm constructors.
 - Non-32-byte AES keys SHA-256 hashed instead of silently truncated.
 - PBKDF2-HMAC-SHA256 replaced with SHA-256 digest for non-32-byte AES keys; `pbkdf2` dependency removed.
 - `ring_list_to_json` errors now properly propagated in JWT encoding, JSON response, and template rendering paths.
 - JWT `exp` claim made optional instead of required.
 - `bolt_force_secure_cookies` updated to accept an explicit enabled flag.
-
-#### Security
-
 - NUL byte injection prevention: file paths validated in `fileSave`, `sendFile`, `sendFileAs`, and `renderFile` methods; returns error status when NUL bytes detected.
-
-#### Routing
-
 - Catch-all routes (`/*`, `/*name`) are now registered after framework endpoints and static file mounts, so they no longer shadow `/docs`, `/openapi.json`, or static files. Known limitation: plain leading params (e.g. `/:id`) still shadow docs endpoints. Covered by Rust unit tests and `test_wildcard_routes`.
-
-#### File Uploads
-
 - File upload switched from `create_new` to `create` + `truncate` to allow overwriting existing files.
-
-#### Cache
-
 - Cache expiry fallback behavior corrected; header key casing preserved.
-
-#### JSON
-
 - JSON encoding returns errors on depth limit exceeded.
-
-#### Environment
-
 - `.env` file loading returns an error on failure instead of silently ignoring.
-
-#### Tests
-
 - Missing `ws_message_rate_limit` and `proxy_whitelist` fields added to server test fixture.
 - Form field added to request struct initializations in tests.
 - CORS config tests aligned with simplified struct fields.
