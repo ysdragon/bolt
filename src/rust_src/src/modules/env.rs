@@ -45,6 +45,13 @@ ring_func!(bolt_env_get, |p| {
 pub static ENV_SET_ALLOWED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
+/// True when `set_var` can safely be called with this key/value pair.
+/// `std::env::set_var` panics on `=` or NUL bytes in the key and on NUL
+/// bytes in the value.
+fn valid_env_pair(key: &str, value: &str) -> bool {
+    !key.is_empty() && !key.contains(['=', '\0']) && !value.contains('\0')
+}
+
 /// bolt_env_set(key, value) → number (1 on success) — set env var (only before bolt_listen is called)
 ring_func!(bolt_env_set, |p| {
     ring_check_paracount!(p, 2);
@@ -61,6 +68,11 @@ ring_func!(bolt_env_set, |p| {
 
     let key = ring_get_string!(p, 1);
     let value = ring_get_string!(p, 2);
+
+    if !valid_env_pair(key, value) {
+        ring_error!(p, "env: invalid key or value");
+        return;
+    }
 
     unsafe {
         std::env::set_var(key, value);
@@ -81,3 +93,30 @@ ring_func!(bolt_env_get_or, |p| {
     let value = std::env::var(key).unwrap_or_else(|_| default.to_string());
     ring_ret_string!(p, &value);
 });
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_valid_env_pair_good() {
+        assert!(valid_env_pair("BOLT_TEST", "some value"));
+        assert!(valid_env_pair("A", "1"));
+    }
+
+    #[test]
+    fn test_valid_env_pair_empty_key() {
+        assert!(!valid_env_pair("", "value"));
+    }
+
+    #[test]
+    fn test_valid_env_pair_equals_in_key() {
+        assert!(!valid_env_pair("a=b", "value"));
+    }
+
+    #[test]
+    fn test_valid_env_pair_nul_byte() {
+        assert!(!valid_env_pair("a\0b", "value"));
+        assert!(!valid_env_pair("key", "va\0lue"));
+    }
+}
