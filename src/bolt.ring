@@ -1150,8 +1150,8 @@ class Bolt {
     }
 
     /// @brief Enables automatic CSRF token verification for state-changing methods (POST/PUT/DELETE/PATCH).
-    /// Requires enableCsrf() to be called first. Token is looked up from X-CSRF-Token header,
-    /// _csrf form field, or _csrf query parameter.
+    /// Requires enableCsrf() to be called first. Token is looked up from X-CSRF-Token header
+    /// or _csrf form field.
     func csrfAutoVerify() {
         bolt_csrf_auto_verify(pHandle)
     }
@@ -1853,7 +1853,10 @@ class Crypto {
 
     /// @brief Encrypts plaintext using AES-256-GCM.
     /// @param cPlaintext Data to encrypt.
-    /// @param cKey 32-byte encryption key (hex or string).
+    /// @param cKey Encryption key: a raw 32-byte key is used directly; any
+    ///             other string key is stretched with Argon2id and a random
+    ///             salt (ciphertexts from older versions using short string
+    ///             keys will not decrypt).
     /// @return Base64-encoded ciphertext with IV and tag.
     func aesEncrypt(cPlaintext, cKey) {
         return bolt_aes_encrypt(cPlaintext, cKey)
@@ -1861,8 +1864,9 @@ class Crypto {
 
     /// @brief Decrypts AES-256-GCM ciphertext.
     /// @param cCiphertext Base64-encoded ciphertext.
-    /// @param cKey 32-byte decryption key (must match encryption key).
-    /// @return Decrypted plaintext string.
+    /// @param cKey Decryption key (must match the encryption key).
+    /// @return Decrypted plaintext string; raises an error on a wrong key,
+    ///         corrupted data, or invalid base64.
     func aesDecrypt(cCiphertext, cKey) {
         return bolt_aes_decrypt(cCiphertext, cKey)
     }
