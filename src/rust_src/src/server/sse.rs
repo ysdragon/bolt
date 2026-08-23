@@ -4,6 +4,16 @@
 
 //! Server-Sent Events (SSE)
 
+/// Serialize an SSE event's `data` field, splitting on `\n` AND `\r` so no
+/// raw CR byte can be injected into the wire format.
+fn sse_data_lines(data: &str) -> Vec<String> {
+    data.replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .lines()
+        .map(|line| format!("data: {}\n", line))
+        .collect()
+}
+
 use actix_web::{HttpRequest, HttpResponse};
 use dashmap::DashMap;
 use futures_util::stream::Stream;
@@ -133,8 +143,8 @@ pub(crate) async fn handle_sse(
                             if let Some(retry) = evt.retry {
                                 event_str.push_str(&format!("retry: {}\n", retry));
                             }
-                            for line in evt.data.lines() {
-                                event_str.push_str(&format!("data: {}\n", line));
+                            for line in sse_data_lines(&evt.data) {
+                                event_str.push_str(&line);
                             }
                             event_str.push('\n');
                             return Poll::Ready(Some(Ok(actix_web::web::Bytes::from(event_str))));
@@ -362,3 +372,29 @@ ring_func!(bolt_sse_max_subscribers, |p| {
 
     ring_ret_number!(p, 1.0);
 });
+
+#[cfg(test)]
+mod tests {
+    use super::sse_data_lines;
+
+    #[test]
+    fn test_sse_data_lines_bare_cr_split() {
+        let out = sse_data_lines("a\rb");
+        assert_eq!(out, vec!["data: a\n", "data: b\n"]);
+        assert!(out.concat().chars().all(|c| c != '\r'));
+    }
+
+    #[test]
+    fn test_sse_data_lines_crlf_produces_two_lines() {
+        let out = sse_data_lines("a\r\nb");
+        assert_eq!(out, vec!["data: a\n", "data: b\n"]);
+    }
+
+    #[test]
+    fn test_sse_data_lines_no_raw_cr_anywhere() {
+        let out = sse_data_lines("x\r\ny\rz\nw");
+        let joined = out.concat();
+        assert!(!joined.contains('\r'));
+        assert_eq!(joined, "data: x\ndata: y\ndata: z\ndata: w\n");
+    }
+}
