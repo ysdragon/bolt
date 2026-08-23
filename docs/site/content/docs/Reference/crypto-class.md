@@ -11,14 +11,14 @@ crypto = new Crypto
 ```
 
 ### crypto.aesEncrypt(cPlaintext, cKey)
-Encrypt plaintext using AES-256-GCM. Returns base64-encoded ciphertext with IV and tag.
+Encrypt plaintext using AES-256-GCM. A raw 32-byte key is used directly; any other string key is stretched with Argon2id using a random salt. Returns base64-encoded ciphertext with IV and tag.
 
 ```ring
 encrypted = crypto.aesEncrypt("secret data", "0123456789abcdef0123456789abcdef")
 ```
 
 ### crypto.aesDecrypt(cCiphertext, cKey)
-Decrypt AES-256-GCM ciphertext. Returns base64-encoded plaintext (decode with `$bolt.base64Decode()`).
+Decrypt AES-256-GCM ciphertext. Key must match the one used for encryption. Returns base64-encoded plaintext (decode with `$bolt.base64Decode()`). Raises an error on wrong key, corrupted data, or invalid base64.
 
 ```ring
 cB64 = crypto.aesDecrypt(encrypted, "0123456789abcdef0123456789abcdef")

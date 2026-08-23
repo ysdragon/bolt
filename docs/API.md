@@ -62,7 +62,7 @@ setHost("127.0.0.1")
 ```
 
 ### setTimeout(nMs)
-Set request timeout in milliseconds.
+Set request timeout in milliseconds. Must be a positive, finite number; zero, negative, NaN, or infinite values are rejected.
 
 ```ring
 setTimeout(30000)  # 30 seconds
@@ -1096,7 +1096,7 @@ es.addEventListener('update', (e) => console.log(e.data));
 ## Authentication
 
 ### $bolt.jwtEncode(aData, cSecret)
-Create JWT token. Secret must be at least 32 bytes.
+Create JWT token. Secret must be at least 32 bytes. Applies a default 3600-second TTL.
 
 ```ring
 token = $bolt.jwtEncode([:user_id = 123, :role = "admin"], "my-secret-key-at-least-32-bytes!!")
@@ -1167,7 +1167,7 @@ token = $bolt.csrfToken()
 ```
 
 ### $bolt.csrfAutoVerify()
-Enable automatic CSRF token verification for state-changing requests (POST, PUT, DELETE, PATCH). Requires `enableCsrf()` to be called first. When enabled, Bolt checks for a valid CSRF token in the `X-CSRF-Token` header, `_csrf` form field, or `_csrf` query parameter. Requests without a valid token receive a 403 response.
+Enable automatic CSRF token verification for state-changing requests (POST, PUT, DELETE, PATCH). Requires `enableCsrf()` to be called first. When enabled, Bolt checks for a valid CSRF token in the `X-CSRF-Token` header or `_csrf` form field. Requests without a valid token receive a 403 response.
 
 ```ring
 enableCsrf("my-csrf-secret")
@@ -1251,6 +1251,8 @@ if !$bolt.checkRateLimit()
     return
 ok
 ```
+
+The per-IP rate limiter is hard-capped at 200,000 entries with fail-open behavior under distributed flood. A warning is logged when the cap is reached. The map is cleaned up every 5 minutes.
 
 ---
 
@@ -1502,7 +1504,7 @@ port = env.getOr("PORT", "3000")
 ```
 
 ### env.setVar(cKey, cValue)
-Set an environment variable.
+Set an environment variable. Rejects keys containing `=` or NUL bytes, and values containing NUL bytes.
 
 ```ring
 env.setVar("APP_ENV", "production")
@@ -1671,14 +1673,14 @@ crypto = new Crypto
 ```
 
 ### crypto.aesEncrypt(cPlaintext, cKey)
-Encrypt plaintext using AES-256-GCM. Returns base64-encoded ciphertext with IV and tag.
+Encrypt plaintext using AES-256-GCM. A raw 32-byte key is used directly; any other string key is stretched with Argon2id using a random salt. Returns base64-encoded ciphertext with IV and tag.
 
 ```ring
 encrypted = crypto.aesEncrypt("secret data", "0123456789abcdef0123456789abcdef")
 ```
 
 ### crypto.aesDecrypt(cCiphertext, cKey)
-Decrypt AES-256-GCM ciphertext. Returns base64-encoded plaintext (decode with `$bolt.base64Decode()`).
+Decrypt AES-256-GCM ciphertext. Key must match the one used for encryption. Returns base64-encoded plaintext (decode with `$bolt.base64Decode()`). Raises an error on wrong key, corrupted data, or invalid base64.
 
 ```ring
 cB64 = crypto.aesDecrypt(encrypted, "0123456789abcdef0123456789abcdef")
@@ -1740,14 +1742,14 @@ tsMs = dt.timestampMs()
 ```
 
 ### dt.formatDate(nTimestamp, cFormat)
-Format a Unix timestamp to a string.
+Format a Unix timestamp to a string. Returns 0 on invalid timestamp or format.
 
 ```ring
 cDate = dt.formatDate(ts, "%Y-%m-%d %H:%M:%S")  # "2026-05-02 14:30:00"
 ```
 
 ### dt.parseDate(cDateStr, cFormat)
-Parse a datetime string to a Unix timestamp.
+Parse a datetime string to a Unix timestamp. Returns 0 on parse failure. When the format contains a timezone-offset directive (`%z`, `%:z`, `%#z`), the input is parsed as offset-aware and normalized to UTC; otherwise it is parsed as naive and assumed UTC.
 
 ```ring
 ts = dt.parseDate("2026-05-02 14:30:00", "%Y-%m-%d %H:%M:%S")
@@ -1817,11 +1819,19 @@ escaped = s.escapeAttr('x onerror=alert(1)')
 ```
 
 ### s.escapeJs(cInput)
-Escape string for safe use in JavaScript string literals.
+Escape string for safe use in single-quoted JavaScript string literals.
 
 ```ring
 escaped = s.escapeJs("hello 'world'" + nl + "newline")
 # Returns: "hello \'world\' \n newline"
+```
+
+### s.escapeJsDq(cInput)
+Escape string for safe use in double-quoted JavaScript string literals.
+
+```ring
+escaped = s.escapeJsDq('hello "world"')
+# Returns: hello \"world\"
 ```
 
 ### s.escapeUrl(cInput)

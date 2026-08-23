@@ -43,11 +43,19 @@ escaped = s.escapeAttr('x onerror=alert(1)')
 ```
 
 ### s.escapeJs(cInput)
-Escape string for safe use in JavaScript string literals.
+Escape string for safe use in single-quoted JavaScript string literals.
 
 ```ring
 escaped = s.escapeJs("hello 'world'" + nl + "newline")
 # Returns: "hello \'world\' \n newline"
+```
+
+### s.escapeJsDq(cInput)
+Escape string for safe use in double-quoted JavaScript string literals.
+
+```ring
+escaped = s.escapeJsDq('hello "world"')
+# Returns: hello \"world\"
 ```
 
 ### s.escapeUrl(cInput)

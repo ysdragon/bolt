@@ -21,4 +21,4 @@ if !$bolt.checkRateLimit()
 ok
 ```
 
-The per-IP rate limiter and per-route governor limiters both run periodic cleanup (every 5 minutes) to remove expired entries, preventing unbounded memory growth from unique IP addresses. A warning is logged when a per-route limiter exceeds 10,000 tracked keys.
+The per-IP rate limiter and per-route governor limiters both run periodic cleanup (every 5 minutes) to remove expired entries, preventing unbounded memory growth from unique IP addresses. The per-IP map is hard-capped at 200,000 entries with fail-open behavior under distributed flood (requests are allowed through when the cap is reached). A warning is logged when a per-route limiter exceeds 10,000 tracked keys.

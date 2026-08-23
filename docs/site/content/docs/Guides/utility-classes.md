@@ -140,7 +140,7 @@ AES-256-GCM encryption and HMAC-SHA256:
 ```ring
 crypto = new Crypto
 
-# AES-256-GCM encryption (key must be 32 bytes)
+# AES-256-GCM encryption (raw 32-byte key used directly; shorter keys stretched with Argon2id)
 key = "0123456789abcdef0123456789abcdef"
 encrypted = crypto.aesEncrypt("secret data", key)
 cB64 = crypto.aesDecrypt(encrypted, key)
@@ -205,6 +205,10 @@ escaped = s.escapeAttr('x onerror=alert(1)')
 # Escape for JavaScript string literals
 escaped = s.escapeJs("hello 'world'" + nl + "newline")
 # Returns: "hello \'world\' \n newline"
+
+# Escape for double-quoted JavaScript string literals
+escaped = s.escapeJsDq('hello "world"')
+# Returns: hello \"world\"
 
 # URL-encode
 encoded = s.escapeUrl("hello world&foo=bar")

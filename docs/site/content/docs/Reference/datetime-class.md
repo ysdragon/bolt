@@ -39,14 +39,14 @@ tsMs = dt.timestampMs()
 ```
 
 ### dt.formatDate(nTimestamp, cFormat)
-Format a Unix timestamp to a string.
+Format a Unix timestamp to a string. Returns 0 on invalid timestamp or format.
 
 ```ring
 cDate = dt.formatDate(ts, "%Y-%m-%d %H:%M:%S")  # "2026-05-02 14:30:00"
 ```
 
 ### dt.parseDate(cDateStr, cFormat)
-Parse a datetime string to a Unix timestamp.
+Parse a datetime string to a Unix timestamp. Returns 0 on parse failure. When the format contains a timezone-offset directive (`%z`, `%:z`, `%#z`), the input is parsed as offset-aware and normalized to UTC; otherwise it is parsed as naive and assumed UTC.
 
 ```ring
 ts = dt.parseDate("2026-05-02 14:30:00", "%Y-%m-%d %H:%M:%S")

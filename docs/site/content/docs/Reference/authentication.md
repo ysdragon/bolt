@@ -5,7 +5,7 @@ summary: "JWT token creation and verification, Basic Auth encoding and decoding"
 ---
 
 ### $bolt.jwtEncode(aData, cSecret)
-Create JWT token. Secret must be at least 32 bytes.
+Create JWT token. Secret must be at least 32 bytes. Applies a default 3600-second TTL.
 
 ```ring
 token = $bolt.jwtEncode([:user_id = 123, :role = "admin"], "my-secret-key-at-least-32-bytes!!")

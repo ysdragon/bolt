@@ -43,7 +43,7 @@ port = env.getOr("PORT", "3000")
 ```
 
 ### env.setVar(cKey, cValue)
-Set an environment variable.
+Set an environment variable. Rejects keys containing `=` or NUL bytes, and values containing NUL bytes.
 
 ```ring
 env.setVar("APP_ENV", "production")

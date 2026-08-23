@@ -26,7 +26,7 @@ setHost("127.0.0.1")
 ```
 
 ### setTimeout(nMs)
-Set request timeout in milliseconds.
+Set request timeout in milliseconds. Must be a positive, finite number; zero, negative, NaN, or infinite values are rejected.
 
 ```ring
 setTimeout(30000)  # 30 seconds
