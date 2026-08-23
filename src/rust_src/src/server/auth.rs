@@ -255,7 +255,24 @@ struct JwtClaims {
     iat: Option<u64>,
 }
 
+/// Default TTL applied by `bolt_jwt_encode` when `expires_in` is omitted.
+fn default_jwt_ttl_seconds() -> u64 {
+    3600
+}
+
+/// True when an explicitly supplied `expires_in` is usable: finite and
+/// strictly positive. (A negative or zero TTL previously saturated to 0 via
+/// the float→u64 cast, producing a token that expires immediately.)
+fn valid_jwt_ttl(seconds: f64) -> bool {
+    seconds.is_finite() && seconds > 0.0
+}
+
 /// bolt_jwt_encode(data, secret, expires_in_seconds) → token  (data can be list or json string)
+///
+/// WARNING: when `expires_in_seconds` is omitted, a default TTL of 3600
+/// seconds is applied. Explicitly passing a TTL is always preferred so
+/// tokens never outlive their intended validity. A supplied TTL must be a
+/// positive, finite number of seconds; anything else raises an error.
 ring_func!(bolt_jwt_encode, |p| {
     ring_check_paracount_range!(p, 2, 3);
     ring_check_string!(p, 2);
@@ -280,9 +297,14 @@ ring_func!(bolt_jwt_encode, |p| {
     }
 
     let expires_in = if ring_api_paracount(p) >= 3 && ring_api_isnumber(p, 3) {
-        Some(ring_get_number!(p, 3) as u64)
+        let n = ring_get_number!(p, 3);
+        if !valid_jwt_ttl(n) {
+            ring_error!(p, "jwt: expires_in must be a positive number of seconds");
+            return;
+        }
+        Some(n as u64)
     } else {
-        None
+        Some(default_jwt_ttl_seconds())
     };
 
     let data: serde_json::Value = serde_json::from_str(&data_json)
@@ -435,6 +457,7 @@ ring_func!(bolt_basic_auth_encode, |p| {
 
 #[cfg(test)]
 mod tests {
+    use super::{default_jwt_ttl_seconds, valid_jwt_ttl};
     use base64::Engine;
     use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
     use serde::{Deserialize, Serialize};
@@ -776,5 +799,57 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "admin");
         assert_eq!(parts[1], "");
+    }
+
+    #[test]
+    fn test_default_jwt_ttl_is_3600() {
+        assert_eq!(default_jwt_ttl_seconds(), 3600);
+    }
+
+    #[test]
+    fn test_valid_jwt_ttl() {
+        assert!(valid_jwt_ttl(60.0));
+        assert!(valid_jwt_ttl(1.0));
+        // Zero, negative, NaN and infinity previously saturated to 0 through
+        // the float→u64 cast (immediately-expired tokens); now rejected.
+        assert!(!valid_jwt_ttl(0.0));
+        assert!(!valid_jwt_ttl(-60.0));
+        assert!(!valid_jwt_ttl(f64::NAN));
+        assert!(!valid_jwt_ttl(f64::INFINITY));
+    }
+
+    #[test]
+    fn test_jwt_expired_token_fails() {
+        let data = serde_json::json!({"user_id": 42});
+        let secret = "test-secret-key-12345678901234567890123456789012";
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let claims = TestJwtClaims {
+            data,
+            iat: Some(now - 7200),
+            exp: Some(now - 60),
+        };
+
+        let token = jsonwebtoken::encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let mut validation = Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.validate_exp = true;
+        validation.leeway = 0;
+        validation.required_spec_claims.clear();
+
+        let result = jsonwebtoken::decode::<TestJwtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &validation,
+        );
+        assert!(result.is_err());
     }
 }
