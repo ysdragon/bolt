@@ -3,6 +3,13 @@
 // Copyright (c) 2026, Youssef Saeed
 
 //! JSON encoding/decoding for Ring
+//!
+//! Booleans are represented in Ring lists by the sentinel strings
+//! `JSON_TRUE`/`JSON_FALSE`. A literal string equal to a sentinel is escaped
+//! by prefixing it with a backslash (`\__JSON_TRUE__` → `"__JSON_TRUE__"`).
+//! Decoding backslash-prefixes sentinel strings so re-encoding round-trips
+//! them as literals; `bolt_json_is_true` only accepts the raw sentinel, so
+//! escaped strings never pass as booleans.
 
 use ring_lang_rs::*;
 use serde_json::{Map, Value};
@@ -94,6 +101,10 @@ ring_func!(bolt_json_false, |p| {
 });
 
 /// bolt_json_is_true(value) → 1.0 if value is JSON true, else 0.0
+///
+/// Only the raw sentinel string (`__JSON_TRUE__`) counts; the backslash-
+/// escaped literal (`\__JSON_TRUE__`, as produced by `bolt_json_decode` for
+/// a JSON string) never passes.
 ring_func!(bolt_json_is_true, |p| {
     ring_check_paracount!(p, 1);
     if ring_api_isstring(p, 1) {
@@ -202,6 +213,13 @@ fn ring_list_to_json_inner(list: RingList, depth: usize) -> Result<Value, String
 fn get_list_item_as_json(list: RingList, index: u32, depth: usize) -> Result<Value, String> {
     if ring_list_isstring(list, index) {
         let s = ring_list_getstring_str(list, index);
+        // A leading backslash followed by a sentinel means "literal string"
+        // (backslash-prefix escaping, see module doc).
+        if let Some(rest) = s.strip_prefix('\\') {
+            if rest == JSON_TRUE || rest == JSON_FALSE {
+                return Ok(Value::String(rest.to_string()));
+            }
+        }
         if s == JSON_TRUE {
             return Ok(Value::Bool(true));
         }
@@ -266,7 +284,12 @@ fn add_json_value_to_list(list: RingList, value: &Value, depth: usize) -> Result
             ring_list_adddouble(list, n.as_f64().unwrap_or(0.0));
         }
         Value::String(s) => {
-            ring_list_addstring_str(list, s);
+            // Backslash-prefix sentinels so they survive a re-encode as literals.
+            if s == JSON_TRUE || s == JSON_FALSE {
+                ring_list_addstring_str(list, &format!("\\{}", s));
+            } else {
+                ring_list_addstring_str(list, s);
+            }
         }
         Value::Array(arr) => {
             let inner = ring_list_newlist(list);
@@ -373,7 +396,43 @@ mod tests {
     #[test]
     fn test_sentinel_string_escaped_as_literal() {
         let list = ring_list_new(0);
-        ring_list_addstring_str(list, JSON_TRUE);
-        assert_eq!(encode(list), "[true]");
+        ring_list_addstring_str(list, &format!("\\{}", JSON_TRUE));
+        assert_eq!(encode(list), r#"["__JSON_TRUE__"]"#);
+    }
+
+    #[test]
+    fn test_sentinel_literal_round_trip() {
+        // serde_json maps are key-sorted, so single-key objects avoid order
+        // assumptions.
+        for (raw, escaped) in [
+            (r#"{"text":"__JSON_TRUE__"}"#, r"\__JSON_TRUE__"),
+            (r#"{"text":"__JSON_FALSE__"}"#, r"\__JSON_FALSE__"),
+        ] {
+            let list = decode(raw);
+            let inner = ring_list_getlist(list, 1);
+            assert_eq!(ring_list_getstring_str(inner, 2), escaped);
+            let restored = encode(list);
+            let a: Value = serde_json::from_str(raw).unwrap();
+            let b: Value = serde_json::from_str(&restored).unwrap();
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn test_double_backslash_round_trip() {
+        // `\\__JSON_TRUE__` (two backslashes) is a plain string: both
+        // backslashes are preserved through encode and JSON-escaped.
+        let list = ring_list_new(0);
+        ring_list_addstring_str(list, &format!("\\\\{}", JSON_TRUE));
+        assert_eq!(encode(list), r#"["\\\\__JSON_TRUE__"]"#);
+    }
+
+    #[test]
+    fn test_decoded_string_sentinel_never_is_true() {
+        let list = decode(r#"{"a":"__JSON_TRUE__"}"#);
+        let inner = ring_list_getlist(list, 1);
+        let s = ring_list_getstring_str(inner, 2);
+        assert_ne!(s, JSON_TRUE);
+        assert_eq!(s, r#"\__JSON_TRUE__"#);
     }
 }
