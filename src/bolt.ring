@@ -2016,6 +2016,13 @@ class Sanitize {
         return bolt_escape_js(cInput)
     }
 
+    /// @brief Escapes string for safe use in double-quoted JavaScript string literals.
+    /// @param cInput Raw string.
+    /// @return Escaped string safe for double-quoted JS contexts.
+    func escapeJsDq(cInput) {
+        return bolt_escape_js_dq(cInput)
+    }
+
     /// @brief URL-encodes a string for safe use in URLs.
     /// @param cInput Raw string.
     /// @return URL-encoded string.
