@@ -532,6 +532,7 @@ pub(crate) struct AppState {
     ws_dropped_count: Arc<std::sync::atomic::AtomicU64>,
     sse_subscriber_counts: Arc<DashMap<String, usize>>,
     sse_max_subscribers: usize,
+    request_timeout_ms: u64,
 }
 
 /// Check route constraints (standalone function for AppState)
@@ -975,17 +976,20 @@ fn resolve_client_ip(
 
             let mut client_ip = peer_addr.to_string();
             for ip in ips.iter().rev() {
-                if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
-                    let is_trusted_proxy = proxy_whitelist.iter().any(|allowed| {
-                        allowed
-                            .parse::<IpNetwork>()
-                            .map(|net| net.contains(addr))
-                            .unwrap_or(false)
-                    });
-                    client_ip = addr.to_string();
-                    if !is_trusted_proxy {
-                        break;
-                    }
+                // Stop the walk at the first unparseable entry — entries to the
+                // left are further away and less trustworthy.
+                let Ok(addr) = ip.parse::<std::net::IpAddr>() else {
+                    break;
+                };
+                let is_trusted_proxy = proxy_whitelist.iter().any(|allowed| {
+                    allowed
+                        .parse::<IpNetwork>()
+                        .map(|net| net.contains(addr))
+                        .unwrap_or(false)
+                });
+                client_ip = addr.to_string();
+                if !is_trusted_proxy {
+                    break;
                 }
             }
             return client_ip;
@@ -1103,6 +1107,14 @@ ring_func!(bolt_listen, |p| {
         let ws_client_rooms = server.ws_client_rooms.clone();
         let ws_event = server.ws_event.clone();
         let error_handler = server.error_handler.clone();
+        // When no @error() handler is registered, install a default
+        // ringvm_errorhandler that just calls ringvm_passerror().
+        if server.error_handler.is_none() {
+            ring_vm_runcode_str(
+                p as RingVM,
+                "func ringvm_errorhandler\nringvm_passerror()\n",
+            );
+        }
         let sse_broadcast_channels = server.sse_broadcast_channels.clone();
         let server_shutdown_rx = server.server_shutdown_tx.subscribe();
         let vm = server.vm.clone();
@@ -1229,6 +1241,32 @@ ring_func!(bolt_listen, |p| {
 // Core Server (async)
 // ========================================
 
+/// Handle of the currently running VM thread, if any.
+static VM_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<()>>> =
+    std::sync::Mutex::new(None);
+
+/// Take the previous VM thread handle out of `slot` (returns `Some` once, then `None`).
+fn take_previous_vm_thread(
+    slot: &mut Option<std::thread::JoinHandle<()>>,
+) -> Option<std::thread::JoinHandle<()>> {
+    slot.take()
+}
+
+/// Only invoke the error handler when the handler produced no response at
+/// all — headers-only responses are legitimate and must not be replaced.
+fn should_run_error_handler(resp: &Option<PendingResponse>) -> bool {
+    resp.is_none()
+}
+
+/// Lock `VM_THREAD` without failing on poison: the guarded data
+/// (`Option<JoinHandle>`) is always valid, so a poisoned lock is safe to
+/// recover from instead of panicking every future `bolt_listen`.
+fn vm_thread_lock() -> std::sync::MutexGuard<'static, Option<std::thread::JoinHandle<()>>> {
+    VM_THREAD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 async fn run_server(
     host: String,
@@ -1277,10 +1315,16 @@ async fn run_server(
     sse_subscriber_counts: Arc<DashMap<String, usize>>,
     sse_max_subscribers: usize,
 ) -> Result<(), std::io::Error> {
+    // Wait for a previous VM thread to finish before spawning a new one on
+    // the same vm_ptr (two threads calling the non-thread-safe VM would race).
+    if let Some(h) = take_previous_vm_thread(&mut vm_thread_lock()) {
+        let _ = h.join();
+    }
+
     let openapi_spec_clone = openapi_spec.clone();
 
     let (vm_tx, mut vm_rx) = tokio::sync::mpsc::channel::<VmWork>(256);
-    {
+    let vm_thread_handle = {
         let current_request = current_request.clone();
         let current_response = current_response.clone();
         let ws_event_for_vm = ws_event.clone();
@@ -1387,7 +1431,7 @@ async fn run_server(
 
                                         let mut response = current_response.lock().take();
 
-                                        if response.as_ref().map_or(true, |r| r.only_headers) {
+                                        if should_run_error_handler(&response) {
                                             if let Some(ref eh) = error_handler_for_vm {
                                                 ring_vm_callfunction_str(vm_ptr as RingVM, eh);
                                                 response = current_response.lock().take();
@@ -1400,6 +1444,7 @@ async fn run_server(
                                 match result {
                                     Ok(response) => {
                                         let _ = response_tx.send(response);
+                                        *current_request.lock() = None;
                                     }
                                     Err(_) => {
                                         eprintln!(
@@ -1507,8 +1552,9 @@ async fn run_server(
                     }
                 }
             })
-            .expect("Failed to spawn VM thread");
-    }
+            .expect("Failed to spawn VM thread")
+    };
+    *vm_thread_lock() = Some(vm_thread_handle);
 
     let state = AppState {
         routes: routes.clone(),
@@ -1539,6 +1585,7 @@ async fn run_server(
         ws_dropped_count,
         sse_subscriber_counts,
         sse_max_subscribers,
+        request_timeout_ms,
     };
 
     const MAX_LIMITER_KEYS: usize = 10_000;
@@ -1882,6 +1929,30 @@ async fn handle_request(
     let request_id_str = uuid::Uuid::new_v4().to_string();
     let request_id = next_request_id();
 
+    // Enforce IP allow/deny BEFORE buffering the body (cheap rejection).
+    let peer_addr = req
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
+    let client_ip_str = resolve_client_ip(&peer_addr, &headers, &state.proxy_whitelist);
+
+    if !state.ip_whitelist.is_empty() || !state.ip_blacklist.is_empty() {
+        let parsed_ip = if client_ip_str == "::1" {
+            std::net::IpAddr::from_str("127.0.0.1")
+                .unwrap_or_else(|_| std::net::IpAddr::from_str("0.0.0.0").unwrap())
+        } else {
+            client_ip_str
+                .parse::<std::net::IpAddr>()
+                .unwrap_or_else(|_| std::net::IpAddr::from_str("0.0.0.0").unwrap())
+        };
+
+        if !is_ip_allowed(parsed_ip, &state.ip_whitelist, &state.ip_blacklist) {
+            return HttpResponse::Forbidden()
+                .insert_header(("X-Request-Id", request_id_str.clone()))
+                .body("Forbidden");
+        }
+    }
+
     let content_type = headers
         .get("content-type")
         .map(|s| s.as_str())
@@ -2002,29 +2073,6 @@ async fn handle_request(
         (body_vec, Vec::new(), form)
     };
 
-    let peer_addr = req
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
-    let client_ip_str = resolve_client_ip(&peer_addr, &headers, &state.proxy_whitelist);
-
-    if !state.ip_whitelist.is_empty() || !state.ip_blacklist.is_empty() {
-        let parsed_ip = if client_ip_str == "::1" {
-            std::net::IpAddr::from_str("127.0.0.1")
-                .unwrap_or_else(|_| std::net::IpAddr::from_str("0.0.0.0").unwrap())
-        } else {
-            client_ip_str
-                .parse::<std::net::IpAddr>()
-                .unwrap_or_else(|_| std::net::IpAddr::from_str("0.0.0.0").unwrap())
-        };
-
-        if !is_ip_allowed(parsed_ip, &state.ip_whitelist, &state.ip_blacklist) {
-            return HttpResponse::Forbidden()
-                .insert_header(("X-Request-Id", request_id_str.clone()))
-                .body("Forbidden");
-        }
-    }
-
     if let Some((max_req, window_secs)) = state
         .routes
         .iter()
@@ -2058,8 +2106,8 @@ async fn handle_request(
     // Read and verify signed session ID to prevent fixation attacks
     let session_id = {
         let raw_cookie = cookies
-            .get("BOLTSESSION")
-            .or_else(|| cookies.get("__Host-BOLTSESSION"))
+            .get("__Host-BOLTSESSION")
+            .or_else(|| cookies.get("BOLTSESSION"))
             .cloned();
 
         match raw_cookie {
@@ -2079,17 +2127,7 @@ async fn handle_request(
                 let csrf_token = {
                     let from_header = headers.get("x-csrf-token").cloned();
                     let from_form = form.get("_csrf").and_then(|v| v.first()).cloned();
-                    let from_query = {
-                        let qs = req.query_string();
-                        if qs.is_empty() {
-                            None
-                        } else {
-                            form_urlencoded::parse(qs.as_bytes())
-                                .find(|(k, _)| k == "_csrf")
-                                .map(|(_, v)| v.to_string())
-                        }
-                    };
-                    from_header.or(from_form).or(from_query).unwrap_or_default()
+                    from_header.or(from_form).unwrap_or_default()
                 };
                 if !crate::server::auth::verify_csrf_token(&csrf_token, &session_id, secret) {
                     return HttpResponse::Forbidden()
@@ -2138,104 +2176,149 @@ async fn handle_request(
         response_tx,
     };
 
-    let response = if state.vm_tx.send(vm_req).await.is_ok() {
-        response_rx.await.unwrap_or(None)
-    } else {
-        None
+    // Outcome of handing the request to the VM under one deadline:
+    // - `Done(Some/None)`: the VM produced a response (or produced nothing),
+    // - `ChannelDown`: the VM side is gone (server not running / crashed),
+    // - outer `Err`: the deadline elapsed (enqueue OR response wait).
+    enum VmOutcome {
+        Done(Option<PendingResponse>),
+        ChannelDown,
+    }
+
+    let outcome = tokio::time::timeout(Duration::from_millis(state.request_timeout_ms), async {
+        if state.vm_tx.send(vm_req).await.is_err() {
+            return VmOutcome::ChannelDown;
+        }
+        VmOutcome::Done(response_rx.await.unwrap_or(None))
+    })
+    .await;
+
+    let response = match outcome {
+        // Deadline elapsed: enqueue wait and response wait are both bounded.
+        Err(_) => {
+            return HttpResponse::GatewayTimeout()
+                .insert_header(("X-Request-Id", request_id_str.clone()))
+                .body("Gateway Timeout");
+        }
+        Ok(VmOutcome::ChannelDown) => {
+            // The VM side is gone (server shutting down or crashed).
+            return HttpResponse::ServiceUnavailable()
+                .insert_header(("X-Request-Id", request_id_str.clone()))
+                .insert_header(("Retry-After", "5"))
+                .body("Server overloaded");
+        }
+        Ok(VmOutcome::Done(None)) => {
+            // The handler ran but produced no response — typically because a
+            // Ring runtime error (e.g. 0 + "abc") was caught by the default
+            // ringvm_errorhandler and no @error() handler supplied one.
+            return HttpResponse::InternalServerError()
+                .insert_header(("X-Request-Id", request_id_str.clone()))
+                .body("Internal Server Error");
+        }
+        Ok(VmOutcome::Done(Some(res))) => res,
     };
 
-    let http_response = match response {
-        Some(res) => {
-            let status = StatusCode::from_u16(res.status).unwrap_or(StatusCode::OK);
-            let headers = res.headers;
-            let cookies = res.cookies;
-            let body = res.body;
-
-            if let Some(etag) = headers.get("ETag").or_else(|| headers.get("etag")) {
-                if req
-                    .headers()
-                    .get("if-none-match")
-                    .and_then(|v| v.to_str().ok())
-                    == Some(etag)
-                {
-                    let mut builder = HttpResponse::NotModified();
-                    builder.insert_header(("X-Request-Id", request_id_str.clone()));
-                    builder.insert_header(("ETag", etag.clone()));
-                    for cookie in &cookies {
-                        builder.append_header((header::SET_COOKIE, cookie.clone()));
-                    }
-                    return builder.finish();
+    let http_response = {
+        let status = match StatusCode::from_u16(response.status) {
+            Ok(s) => s,
+            Err(_) => {
+                // Warn on the first occurrence of each distinct bad status
+                // (0 = none warned yet), not just once per process.
+                static LAST_WARNED_STATUS: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                let raw = response.status as u32;
+                if LAST_WARNED_STATUS.swap(raw, std::sync::atomic::Ordering::SeqCst) != raw {
+                    eprintln!(
+                        "[bolt] handler returned out-of-range status {}; coercing to 200",
+                        response.status
+                    );
                 }
+                StatusCode::OK
             }
+        };
+        let headers = response.headers;
+        let cookies = response.cookies;
+        let body = response.body;
 
-            match body {
-                ResponseBody::Bytes(b) => {
-                    let mut builder = HttpResponse::build(status);
-                    builder.insert_header(("X-Request-Id", request_id_str.clone()));
+        if let Some(etag) = headers.get("ETag").or_else(|| headers.get("etag")) {
+            if req
+                .headers()
+                .get("if-none-match")
+                .and_then(|v| v.to_str().ok())
+                == Some(etag)
+            {
+                let mut builder = HttpResponse::NotModified();
+                builder.insert_header(("X-Request-Id", request_id_str.clone()));
+                builder.insert_header(("ETag", etag.clone()));
+                for cookie in &cookies {
+                    builder.append_header((header::SET_COOKIE, cookie.clone()));
+                }
+                return builder.finish();
+            }
+        }
+
+        match body {
+            ResponseBody::Bytes(b) => {
+                let mut builder = HttpResponse::build(status);
+                builder.insert_header(("X-Request-Id", request_id_str.clone()));
+
+                for (key, value) in headers {
+                    let key_lower = key.to_lowercase();
+                    if BLOCKED_RESPONSE_HEADERS.contains(&key_lower.as_str()) {
+                        continue;
+                    }
+                    builder.insert_header((key, value));
+                }
+
+                for cookie in cookies {
+                    builder.append_header((header::SET_COOKIE, cookie));
+                }
+
+                builder.body(b)
+            }
+            ResponseBody::File(path) => match actix_files::NamedFile::open(&path) {
+                Ok(named_file) => {
+                    let mut resp = named_file
+                        .customize()
+                        .with_status(status)
+                        .respond_to(&req)
+                        .map_into_boxed_body();
+                    let headers_mut = resp.headers_mut();
+
+                    if let Ok(val) = actix_web::http::header::HeaderValue::from_str(&request_id_str)
+                    {
+                        headers_mut.insert(
+                            actix_web::http::header::HeaderName::from_static("x-request-id"),
+                            val,
+                        );
+                    }
 
                     for (key, value) in headers {
                         let key_lower = key.to_lowercase();
                         if BLOCKED_RESPONSE_HEADERS.contains(&key_lower.as_str()) {
                             continue;
                         }
-                        builder.insert_header((key, value));
+                        if let (Ok(k), Ok(v)) = (
+                            actix_web::http::header::HeaderName::try_from(key.as_str()),
+                            actix_web::http::header::HeaderValue::from_str(&value),
+                        ) {
+                            headers_mut.insert(k, v);
+                        }
                     }
 
                     for cookie in cookies {
-                        builder.append_header((header::SET_COOKIE, cookie));
+                        if let Ok(v) = actix_web::http::header::HeaderValue::from_str(&cookie) {
+                            headers_mut.append(actix_web::http::header::SET_COOKIE, v);
+                        }
                     }
 
-                    builder.body(b)
+                    resp
                 }
-                ResponseBody::File(path) => match actix_files::NamedFile::open(&path) {
-                    Ok(named_file) => {
-                        let mut resp = named_file
-                            .customize()
-                            .with_status(status)
-                            .respond_to(&req)
-                            .map_into_boxed_body();
-                        let headers_mut = resp.headers_mut();
-
-                        if let Ok(val) =
-                            actix_web::http::header::HeaderValue::from_str(&request_id_str)
-                        {
-                            headers_mut.insert(
-                                actix_web::http::header::HeaderName::from_static("x-request-id"),
-                                val,
-                            );
-                        }
-
-                        for (key, value) in headers {
-                            let key_lower = key.to_lowercase();
-                            if BLOCKED_RESPONSE_HEADERS.contains(&key_lower.as_str()) {
-                                continue;
-                            }
-                            if let (Ok(k), Ok(v)) = (
-                                actix_web::http::header::HeaderName::try_from(key.as_str()),
-                                actix_web::http::header::HeaderValue::from_str(&value),
-                            ) {
-                                headers_mut.insert(k, v);
-                            }
-                        }
-
-                        for cookie in cookies {
-                            if let Ok(v) = actix_web::http::header::HeaderValue::from_str(&cookie) {
-                                headers_mut.append(actix_web::http::header::SET_COOKIE, v);
-                            }
-                        }
-
-                        resp
-                    }
-                    Err(_) => HttpResponse::NotFound()
-                        .insert_header(("X-Request-Id", request_id_str))
-                        .body("File not found"),
-                },
-            }
+                Err(_) => HttpResponse::NotFound()
+                    .insert_header(("X-Request-Id", request_id_str))
+                    .body("File not found"),
+            },
         }
-        None => HttpResponse::ServiceUnavailable()
-            .insert_header(("X-Request-Id", request_id_str))
-            .insert_header(("Retry-After", "5"))
-            .body("Server overloaded"),
     };
 
     http_response
@@ -3012,7 +3095,15 @@ ring_func!(bolt_set_timeout, |p| {
         return;
     }
 
-    let ms = ring_get_number!(p, 2) as u64;
+    let ms_f = ring_get_number!(p, 2);
+    // A zero/negative/non-finite value would become a 0 ms handler deadline,
+    // instantly timing out every VM-served request (and actix's
+    // client_request_timeout). Reject it explicitly instead.
+    if !ms_f.is_finite() || ms_f <= 0.0 {
+        ring_error!(p, "timeout: milliseconds must be a positive number");
+        return;
+    }
+    let ms = ms_f as u64;
 
     unsafe {
         let server = &mut *(ptr as *mut HttpServer);
@@ -4596,6 +4687,7 @@ mod tests {
             ws_dropped_count: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             sse_subscriber_counts: Arc::new(DashMap::new()),
             sse_max_subscribers: 1000,
+            request_timeout_ms: 30000,
         }
     }
 
@@ -4744,8 +4836,10 @@ mod tests {
         assert_eq!(body["info"]["title"], "Bolt API");
 
         // The catch-all still handles non-framework paths. It dispatches to
-        // the VM, which is absent in tests, so the handler yields 503 —
-        // proving the catch-all matched rather than a framework endpoint.
+        // the VM, which is absent in tests (its receiver is dropped), so the
+        // send fails and the handler yields 503 ServiceUnavailable — proving
+        // the catch-all matched rather than a framework endpoint. (Only a
+        // genuine deadline expiry yields 504 Gateway Timeout.)
         let req = aw_test::TestRequest::get()
             .uri("/anything/else")
             .to_request();
@@ -5271,5 +5365,64 @@ mod tests {
         assert!(!ctx.is_binary);
         assert!(ctx.binary_data.is_empty());
         assert!(ctx.params.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_client_ip_stops_at_unparseable_xff() {
+        let headers = HashMap::from([(
+            "x-forwarded-for".to_string(),
+            "10.0.0.8, garbage".to_string(),
+        )]);
+        let proxy_whitelist = vec!["10.0.0.0/8".to_string()];
+        let resolved = resolve_client_ip("10.0.0.1", &headers, &proxy_whitelist);
+        assert_ne!(resolved, "10.0.0.8");
+        assert_eq!(resolved, "10.0.0.1");
+    }
+
+    #[test]
+    fn test_resolve_client_ip_untrusted_xff_is_last_non_proxy() {
+        let headers = HashMap::from([(
+            "x-forwarded-for".to_string(),
+            "203.0.113.7, 10.0.0.8".to_string(),
+        )]);
+        let proxy_whitelist = vec!["10.0.0.0/8".to_string()];
+        assert_eq!(
+            resolve_client_ip("10.0.0.1", &headers, &proxy_whitelist),
+            "203.0.113.7"
+        );
+    }
+
+    #[test]
+    fn test_resolve_client_ip_no_xff_uses_peer() {
+        let headers = HashMap::new();
+        let proxy_whitelist = vec!["10.0.0.0/8".to_string()];
+        assert_eq!(
+            resolve_client_ip("10.0.0.1", &headers, &proxy_whitelist),
+            "10.0.0.1"
+        );
+    }
+
+    #[test]
+    fn test_should_run_error_handler() {
+        assert!(should_run_error_handler(&None));
+        assert!(!should_run_error_handler(&Some(PendingResponse {
+            status: 204,
+            headers: HashMap::new(),
+            cookies: Vec::new(),
+            body: ResponseBody::Bytes(Vec::new()),
+            only_headers: true,
+        })));
+    }
+
+    #[test]
+    fn test_take_previous_vm_thread_invariant() {
+        let mut slot: Option<std::thread::JoinHandle<()>> = None;
+        let first = take_previous_vm_thread(&mut slot);
+        assert!(first.is_none());
+        let thread = std::thread::spawn(|| {});
+        slot = Some(thread);
+        let taken = take_previous_vm_thread(&mut slot);
+        assert!(taken.is_some());
+        assert!(take_previous_vm_thread(&mut slot).is_none());
     }
 }
