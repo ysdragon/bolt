@@ -14,7 +14,7 @@ ring_func!(bolt_validate_email, |p| {
     ring_check_string!(p, 1);
     let s = ring_get_string!(p, 1);
     static RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"^[a-zA-Z0-9_%+\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$")
+        Regex::new(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$")
             .expect("valid regex")
     });
     let valid = RE.is_match(s) && !s.contains("..") && s.len() <= 254;
