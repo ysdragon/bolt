@@ -59,7 +59,12 @@ ring_func!(bolt_req_file, |p| {
         return;
     }
 
-    let index = (ring_get_number!(p, 2) as usize).saturating_sub(1);
+    let idx_raw = ring_get_number!(p, 2);
+    if idx_raw < 1.0 || !idx_raw.is_finite() {
+        ring_ret_list!(p, ring_new_list!(p));
+        return;
+    }
+    let index = (idx_raw as usize) - 1;
 
     unsafe {
         let server = &*(ptr as *const HttpServer);
@@ -147,7 +152,12 @@ ring_func!(bolt_req_file_save, |p| {
         return;
     }
 
-    let index = (ring_get_number!(p, 2) as usize).saturating_sub(1);
+    let idx_raw = ring_get_number!(p, 2);
+    if idx_raw < 1.0 || !idx_raw.is_finite() {
+        ring_ret_number!(p, 0.0);
+        return;
+    }
+    let index = (idx_raw as usize) - 1;
     let path = ring_get_string!(p, 3);
 
     // Prevent path traversal and absolute paths
