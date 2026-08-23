@@ -90,7 +90,7 @@ curl -b cookies.txt -X POST http://localhost:3000/api/manual-verify \
         <input type="text" name="data" placeholder="Enter data">
         <button type="submit">Submit</button>
     </form>
-    <p>csrfAutoVerify() checks: X-CSRF-Token header, _csrf form field, or _csrf query param</p>
+    <p>csrfAutoVerify() checks: X-CSRF-Token header or _csrf form field</p>
 </body>
 </html>
         `)
