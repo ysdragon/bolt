@@ -9,8 +9,7 @@ summary: "One-line hello world and a real app"
 One line is all it takes:
 
 ```ring
-load "bolt.ring"
-new Bolt() { $bolt.send("Hello, World!") }
+load "bolt.ring" new Bolt() { @get("/", func { $bolt.send("Hello, World!") }) }
 ```
 
 Run it:

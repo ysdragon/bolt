@@ -28,8 +28,7 @@ Bolt brings modern web development to Ring. It pairs an **Express.js-like DSL** 
 One line is all it takes:
 
 ```ring
-load "bolt.ring"
-new Bolt() { $bolt.send("Hello, World!") }
+load "bolt.ring" new Bolt() { @get("/", func { $bolt.send("Hello, World!") }) }
 ```
 
 A real app with routing, params, and JSON:
