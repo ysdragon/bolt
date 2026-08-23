@@ -46,6 +46,8 @@ def test_csrf_via_header(client):
 
 
 def test_csrf_via_query_param(client):
+    # Query-string CSRF tokens were removed as a source: tokens in URLs can
+    # leak via logs, history, and Referer headers. Header/form only.
     token = _get_csrf_token(client)
     r = client.post(f"/csrf/query-token?_csrf={token}")
-    assert r.status_code == 200
+    assert r.status_code == 403
