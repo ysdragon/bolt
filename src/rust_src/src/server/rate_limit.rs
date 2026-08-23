@@ -22,6 +22,33 @@ static RATE_LIMIT_WINDOW: AtomicU64 = AtomicU64::new(60);
 static RATE_LIMIT_ENABLED: AtomicBool = AtomicBool::new(false);
 static RATE_LIMIT_IP_MAP: std::sync::LazyLock<dashmap::DashMap<String, IpRateEntry>> =
     std::sync::LazyLock::new(|| dashmap::DashMap::new());
+static RATE_LIMIT_CAP_WARNED: AtomicBool = AtomicBool::new(false);
+
+const RATE_LIMIT_IP_MAP_CAP: usize = 200_000;
+
+/// True when the per-IP rate limit map has reached its hard cap.
+fn map_over_cap(len: usize) -> bool {
+    len >= RATE_LIMIT_IP_MAP_CAP
+}
+
+/// Seconds since the Unix epoch (0 for pre-1970 clocks — degrades to a
+/// window-reset instead of a panic).
+fn secs_since_epoch() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Validate `bolt_rate_limit` arguments: non-negative max, positive window.
+fn validate_rate_limit_args(max: f64, win: f64) -> Result<(), &'static str> {
+    if !max.is_finite() || max < 0.0 || !win.is_finite() || win <= 0.0 {
+        return Err(
+            "rate limit: max_requests must be non-negative and window_seconds must be positive",
+        );
+    }
+    Ok(())
+}
 
 /// bolt_rate_limit(max_requests, window_seconds) → configure rate limiting
 ring_func!(bolt_rate_limit, |p| {
@@ -31,12 +58,8 @@ ring_func!(bolt_rate_limit, |p| {
 
     let max_req_f = ring_get_number!(p, 1);
     let window_sec_f = ring_get_number!(p, 2);
-    if !max_req_f.is_finite() || max_req_f < 0.0 || !window_sec_f.is_finite() || window_sec_f < 0.0
-    {
-        ring_error!(
-            p,
-            "rate limit: max_requests and window_seconds must be non-negative finite numbers"
-        );
+    if let Err(msg) = validate_rate_limit_args(max_req_f, window_sec_f) {
+        ring_error!(p, msg);
         return;
     }
     let max_requests = max_req_f as u64;
@@ -56,10 +79,7 @@ ring_func!(bolt_check_rate_limit, |p| {
         return;
     }
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = secs_since_epoch();
 
     let window = RATE_LIMIT_WINDOW.load(Ordering::SeqCst);
     let max = RATE_LIMIT_MAX.load(Ordering::SeqCst);
@@ -89,6 +109,19 @@ ring_func!(bolt_check_rate_limit, |p| {
     } else {
         client_ip
     };
+
+    // Hard cap on map growth: past the cap, new IPs are allowed without
+    // limiting (fail-open under flood).
+    if map_over_cap((*RATE_LIMIT_IP_MAP).len()) {
+        if !RATE_LIMIT_CAP_WARNED.swap(true, Ordering::SeqCst) {
+            eprintln!(
+                "[bolt] rate limit map reached cap ({}); new IPs allowed without limiting",
+                RATE_LIMIT_IP_MAP_CAP
+            );
+        }
+        ring_ret_number!(p, 1.0);
+        return;
+    }
 
     let entry = (*RATE_LIMIT_IP_MAP)
         .entry(ip_key.clone())
@@ -132,15 +165,17 @@ ring_func!(bolt_check_rate_limit, |p| {
 
 /// Clean up expired entries from the per-IP rate limit map
 pub fn rate_limit_cleanup_ip_map() {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = secs_since_epoch();
     let window = RATE_LIMIT_WINDOW.load(Ordering::SeqCst);
     (*RATE_LIMIT_IP_MAP).retain(|_, entry| {
         let window_start = entry.window_start.load(Ordering::SeqCst);
         now.saturating_sub(window_start) < window
     });
+    // Re-arm the cap warning so a future flood warns again instead of the
+    // warning firing only once per process.
+    if (*RATE_LIMIT_IP_MAP).len() < RATE_LIMIT_IP_MAP_CAP {
+        RATE_LIMIT_CAP_WARNED.store(false, Ordering::SeqCst);
+    }
 }
 
 /// bolt_route_rate_limit(server, handler_name, max_requests, window_seconds) → set per-route rate limit
@@ -160,12 +195,8 @@ ring_func!(bolt_route_rate_limit, |p| {
     let handler_name = ring_get_string!(p, 2);
     let max_req_f = ring_get_number!(p, 3);
     let window_sec_f = ring_get_number!(p, 4);
-    if !max_req_f.is_finite() || max_req_f < 0.0 || !window_sec_f.is_finite() || window_sec_f < 0.0
-    {
-        ring_error!(
-            p,
-            "rate limit: max_requests and window_seconds must be non-negative finite numbers"
-        );
+    if let Err(msg) = validate_rate_limit_args(max_req_f, window_sec_f) {
+        ring_error!(p, msg);
         return;
     }
     let max_requests = max_req_f as u64;
@@ -257,5 +288,29 @@ mod tests {
             .find(|r| r.handler_name == "api_handler")
             .unwrap();
         assert_eq!(route.rate_limit, Some((100, 60)));
+    }
+
+    #[test]
+    fn test_validate_rate_limit_args() {
+        assert!(validate_rate_limit_args(100.0, 60.0).is_ok());
+        assert!(validate_rate_limit_args(0.0, 60.0).is_ok());
+        assert!(validate_rate_limit_args(100.0, 0.0).is_err());
+        assert!(validate_rate_limit_args(-1.0, 60.0).is_err());
+        assert!(validate_rate_limit_args(100.0, -60.0).is_err());
+        assert!(validate_rate_limit_args(f64::NAN, 60.0).is_err());
+        assert!(validate_rate_limit_args(f64::INFINITY, 60.0).is_err());
+    }
+
+    #[test]
+    fn test_map_over_cap() {
+        assert!(!map_over_cap(0));
+        assert!(!map_over_cap(199_999));
+        assert!(map_over_cap(200_000));
+        assert!(map_over_cap(1_000_000));
+    }
+
+    #[test]
+    fn test_secs_since_epoch_positive() {
+        assert!(secs_since_epoch() > 1_700_000_000);
     }
 }
