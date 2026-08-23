@@ -31,9 +31,18 @@ fn redact_pii(msg: &str) -> String {
         regex::Regex::new(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}").expect("valid regex")
     });
     // Redact common token/key patterns (Bearer tokens, API keys, etc.)
+    //
+    // Consumes the keyword, its separator, any chained keywords/auth schemes
+    // ("Bearer eyJ...", "bearer token: x"), and exactly ONE following token.
+    // Everything after the secret is preserved — do not replace `\S+` with a
+    // multi-token quantifier like `(\S+\s*)*`, which erases the rest of the
+    // log line (and subsequent lines) whenever a message merely contains the
+    // word "token"/"password"/etc.
     static TOKEN_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(bearer|api[_-]?key|token|secret|password|authorization)[:=]\s*\S+")
-            .expect("valid regex")
+        regex::Regex::new(
+            r"(?i)\b(bearer|api[_-]?key|token|secret|password|authorization)\b(?:[:=]\s*|\s+)(?:(?:bearer|basic|digest|negotiate|api[_-]?key|token|secret|password|authorization)\b(?:[:=]\s*|\s+))*\S+",
+        )
+        .expect("valid regex")
     });
     let result = EMAIL_RE.replace_all(msg, "[REDACTED_EMAIL]");
     let result = TOKEN_RE.replace_all(&result, "${1}: [REDACTED]");
@@ -116,3 +125,72 @@ ring_func!(bolt_set_log_level, |p| {
     LOG_LEVEL.store(log_level_num(level), std::sync::atomic::Ordering::SeqCst);
     ring_ret_number!(p, 1.0);
 });
+
+#[cfg(test)]
+mod tests {
+    use super::redact_pii;
+
+    #[test]
+    fn test_redact_bearer_header() {
+        let out = redact_pii("Authorization: Bearer eyJ.abc");
+        assert!(!out.contains("eyJ"), "got: {out}");
+        assert!(!out.contains("abc"), "got: {out}");
+    }
+
+    #[test]
+    fn test_redact_api_key_equals() {
+        let out = redact_pii("api_key=xyz");
+        assert!(!out.contains("xyz"), "got: {out}");
+    }
+
+    #[test]
+    fn test_redact_token_colon() {
+        let out = redact_pii("token: t0k");
+        assert!(!out.contains("t0k"), "got: {out}");
+    }
+
+    #[test]
+    fn test_redact_bearer_then_token() {
+        let out = redact_pii("bearer token: B");
+        assert!(!out.contains("B"), "got: {out}");
+    }
+
+    #[test]
+    fn test_redact_password_and_secret() {
+        // Two independent key/value pairs in one line: each secret follows
+        // its own keyword, so both are redacted.
+        let out = redact_pii("password=supersecret and secret: hidden");
+        assert!(!out.contains("supersecret"), "got: {out}");
+        assert!(!out.contains("hidden"), "got: {out}");
+    }
+
+    #[test]
+    fn test_redaction_preserves_surrounding_log_data() {
+        // Only the single token after a keyword may be redacted; a message
+        // that merely CONTAINS the word "token" keeps its remaining content.
+        let out = redact_pii("Invalid token provided for user alice from 10.0.0.5");
+        assert!(out.contains("for user alice"), "got: {out}");
+        assert!(out.contains("10.0.0.5"), "got: {out}");
+
+        let out = redact_pii("GET /api?page=1 for user bob");
+        assert_eq!(out, "GET /api?page=1 for user bob");
+    }
+
+    #[test]
+    fn test_redact_basic_auth_scheme() {
+        let out = redact_pii("Authorization: Basic dXNlcjpwYXNz");
+        assert!(!out.contains("dXNlcjpwYXNz"), "got: {out}");
+    }
+
+    #[test]
+    fn test_keyword_alone_not_redacted() {
+        // Nothing follows the keyword, so there is nothing to consume.
+        assert_eq!(redact_pii("secret"), "secret");
+        assert_eq!(redact_pii("token rotation done"), "token: [REDACTED] done");
+    }
+
+    #[test]
+    fn test_no_false_positive_monkey() {
+        assert_eq!(redact_pii("monkey"), "monkey");
+    }
+}
