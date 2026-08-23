@@ -13,6 +13,28 @@ use ring_lang_rs::*;
 
 use super::{AppState, HttpServer, VmWork, WsEventContext, WsOutMessage};
 
+/// True when the Origin header is allowed for the given Host.
+///
+/// The origin host must equal the request host exactly, or be a subdomain
+/// of it. An empty host fails open (pre-existing behavior).
+fn origin_allowed(origin: &str, host: &str) -> bool {
+    if host.is_empty() {
+        return true;
+    }
+    let origin_host = origin
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .trim_start_matches("ws://")
+        .trim_start_matches("wss://")
+        .split('/')
+        .next()
+        .unwrap_or("");
+    // Hostnames are case-insensitive (DNS), so compare lowercased.
+    let oh = origin_host.to_ascii_lowercase();
+    let h = host.to_ascii_lowercase();
+    oh == h || oh.strip_suffix(&h).map_or(false, |p| p.ends_with('.'))
+}
+
 pub(crate) async fn handle_websocket(
     req: HttpRequest,
     stream: actix_web::web::Payload,
@@ -30,7 +52,7 @@ pub(crate) async fn handle_websocket(
                 .get("host")
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("");
-            if !origin_str.contains(host) && !host.is_empty() {
+            if !origin_allowed(origin_str, host) {
                 return Ok(HttpResponse::Forbidden().body("Origin not allowed"));
             }
         }
@@ -259,7 +281,15 @@ pub(crate) async fn handle_websocket(
                             iv.tick().await;
                         }
                     }
-                    actix_ws::AggregatedMessage::Close(_) => break,
+                    actix_ws::AggregatedMessage::Close(_) => {
+                        let _ = reader_tx
+                            .send(WsOutMessage::Close {
+                                code: None,
+                                reason: None,
+                            })
+                            .await;
+                        break;
+                    }
                     actix_ws::AggregatedMessage::Ping(bytes) => {
                         let _ = reader_tx.send(WsOutMessage::Pong(bytes)).await;
                     }
@@ -980,3 +1010,51 @@ ring_func!(bolt_ws_dropped_count, |p| {
         ring_ret_number!(p, count as f64);
     }
 });
+
+#[cfg(test)]
+mod tests {
+    use super::origin_allowed;
+
+    #[test]
+    fn test_origin_exact_host_allowed() {
+        assert!(origin_allowed("http://example.com", "example.com"));
+        assert!(origin_allowed("https://example.com", "example.com"));
+        assert!(origin_allowed("ws://example.com", "example.com"));
+    }
+
+    #[test]
+    fn test_origin_subdomain_allowed() {
+        assert!(origin_allowed("https://sub.example.com", "example.com"));
+        assert!(origin_allowed("https://a.b.example.com", "example.com"));
+    }
+
+    #[test]
+    fn test_origin_wrong_host_denied() {
+        assert!(!origin_allowed("https://attacker.com", "example.com"));
+        assert!(!origin_allowed(
+            "https://example.com.attacker.tld",
+            "example.com"
+        ));
+        assert!(!origin_allowed("https://fakeexample.com", "example.com"));
+    }
+
+    #[test]
+    fn test_origin_port_mismatch_denied() {
+        assert!(!origin_allowed("https://example.com:8443", "example.com"));
+        assert!(origin_allowed(
+            "https://example.com:8443",
+            "example.com:8443"
+        ));
+    }
+
+    #[test]
+    fn test_origin_case_insensitive() {
+        assert!(origin_allowed("https://EXAMPLE.COM", "example.com"));
+        assert!(origin_allowed("https://SUB.Example.com", "example.com"));
+    }
+
+    #[test]
+    fn test_origin_empty_host_fails_open() {
+        assert!(origin_allowed("https://attacker.com", ""));
+    }
+}
